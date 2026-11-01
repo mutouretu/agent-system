@@ -13,11 +13,15 @@ import stat
 import tempfile
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
-from rd_platform.domain import Project, Task, TaskInput
+from rd_platform.domain import Project, Task, TaskInput, TaskOutput
 from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher, create_default_registry
+from .run_store import RunStore, StoreConflict
+from .workbench import install_workbench, worker_token
+from .requirements import install_requirements
 
 MAX_BYTES = 1024 * 1024
 
@@ -27,12 +31,13 @@ class Settings:
     data: Path
     logs: Path
     models: Path
+    database_url: str | None = None
 
     @classmethod
     def from_env(cls):
         return cls(*(Path(os.environ.get(name, default)) for name, default in (
             ("RD_DATA_DIR", "/app/data"), ("RD_LOG_DIR", "/app/logs"), ("RD_MODELS_DIR", "/app/models"),
-        )))
+        )), database_url=os.environ.get("RD_DATABASE_URL"))
 
 
 class Record(BaseModel):
@@ -68,6 +73,21 @@ class ProjectRequest(BaseModel):
     tasks: list[TaskRequest] = Field(default_factory=list, max_length=100)
 
 
+class WorkspaceMilestone(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=128)
+    goal: str = Field(default="", max_length=4000)
+    packages: list[Annotated[str, Field(min_length=1, max_length=512)]] = Field(max_length=100)
+    run_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+
+
+class WorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0)
+    milestones: list[WorkspaceMilestone] = Field(max_length=50)
+    accepted: list[Annotated[str, Field(max_length=4096)]] = Field(default_factory=list, max_length=1000)
+
+
 class BodyLimit:
     """Bound actual streamed bytes, including requests without Content-Length."""
 
@@ -83,7 +103,8 @@ class BodyLimit:
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > MAX_BYTES:
+            limit = 8 * MAX_BYTES if scope.get("path", "").startswith("/internal/worker/") else MAX_BYTES
+            if len(body) > limit:
                 await send({"type": "http.response.start", "status": 413, "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"detail":"request exceeds 1 MiB"}'})
                 return
@@ -122,6 +143,10 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
+        # PostgreSQL in Compose; SQLite is only for isolated single-process tests.
+        database = RunStore(settings.database_url or f"sqlite:///{settings.data / 'workbench-test.db'}")
+        app.state.run_store = database
+        app.state.worker_token = worker_token(settings.data)
         app.state.ready = True
         logger.info("service started")
         try:
@@ -131,16 +156,53 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             logger.info("service stopped")
             logger.removeHandler(handler)
             handler.close()
+            database.close()
 
-    app = FastAPI(title="R&D Platform Development API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="R&D Platform Development API", version="0.3.0", lifespan=lifespan)
     app.add_middleware(BodyLimit)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]", "api", "testserver"])
     app.state.agent_registry = registry
     app.state.dispatcher = dispatcher
     app.state.projects = projects
 
+    @app.middleware("http")
+    async def browser_boundary(request: Request, call_next):
+        origin = request.headers.get("origin")
+        if request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin != str(request.base_url).rstrip("/"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "cross-origin mutation is not allowed"}, status_code=403)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if request.url.path == "/" or request.url.path.startswith("/assets/"):
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+        return response
+
+    install_workbench(app)
+    install_requirements(app)
+
+    @app.get("/v1/projects")
+    async def list_projects():
+        return {"projects": app.state.run_store.list_projects()}
+
+    @app.get("/v1/projects/{id}")
+    async def get_project(id: str):
+        record = app.state.run_store.get_project(id)
+        if record is None:
+            raise HTTPException(404, "project not found")
+        return record
+
     @app.get("/v1/agents")
     async def list_agents():
         return {"agents": [metadata.to_dict() for metadata in registry.list_agents()]}
+
+    @app.put("/v1/projects/{id}/workspace")
+    async def update_workspace(id: str, request: WorkspaceRequest):
+        try:
+            return app.state.run_store.update_workspace(id, request.model_dump())
+        except KeyError:
+            raise HTTPException(404, "project not found") from None
+        except StoreConflict as error:
+            raise HTTPException(409, str(error)) from None
 
     @app.post("/v1/projects", status_code=201)
     async def create_project(request: ProjectRequest):
@@ -156,6 +218,10 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             project.build_dag()
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
+        try:
+            app.state.run_store.save_project(project.to_dict())
+        except StoreConflict as exc:
+            raise HTTPException(409, str(exc)) from None
         projects[project.id] = project
         logger.info("created project=%s tasks=%s", project.id, len(project.tasks))
         return project.to_dict()
@@ -164,19 +230,30 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
     async def dispatch_project(id: str):
         project = projects.get(id)
         if project is None:
-            raise HTTPException(404, "project not found")
+            record = app.state.run_store.get_project(id)
+            if record is None:
+                raise HTTPException(404, "project not found")
+            project = Project(record["name"], id=record["id"], context=record["context"])
+            for item in record["tasks"]:
+                options = {**item, "input": TaskInput(item["input"]),
+                           "output": TaskOutput(item["output"]) if item["output"] is not None else None}
+                if options["status"] == "RUNNING":
+                    options.update(status="FAILED", error="service restarted during legacy dispatch")
+                project.add_task(Task(**options))
+            projects[id] = project
         try:
             await dispatcher.dispatch(project)
         except DispatchConflict as exc:
             raise HTTPException(409, str(exc)) from None
         logger.info("dispatched project=%s states=%s", id, [task.status.value for task in project.tasks])
+        app.state.run_store.save_project(project.to_dict())
         return project.to_dict()
 
     @app.get("/health")
     async def health():
         if not getattr(app.state, "ready", False) or not all(p.is_dir() for p in (settings.data, settings.logs, settings.models)):
             raise HTTPException(503, "storage not ready")
-        return {"status": "ok", "service": "api", "version": "0.2.0"}
+        return {"status": "ok", "service": "api", "version": "0.3.0"}
 
     @app.post("/v1/algorithms/filter")
     async def filter_records(request: FilterRequest):

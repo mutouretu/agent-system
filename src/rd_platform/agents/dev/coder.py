@@ -14,8 +14,8 @@ class CoderInput(Contract):
 
 @register_agent("coder")
 class CoderAgent(GeneratingAgent):
-    def __init__(self, generator=None):
-        super().__init__(AgentMetadata("coder", "Coder", {"coding"}, role=CODER), generator)
+    def __init__(self, generator=None, *, provider=None):
+        super().__init__(AgentMetadata("coder", "Coder", {"coding"}, role=CODER), generator, provider=provider)
 
     async def run(self, request: AgentInput) -> AgentOutput:
         try:

@@ -1,0 +1,212 @@
+"""Persistent local workbench queue. Production claims use PostgreSQL SKIP LOCKED."""
+
+from contextlib import contextmanager
+import time
+import uuid
+
+from sqlalchemy import (JSON, Column, Float, ForeignKey, Integer, MetaData, String, Table,
+                        Text, create_engine, func, select, update)
+
+metadata = MetaData()
+projects = Table("workbench_projects", metadata,
+    Column("id", String(32), primary_key=True), Column("payload", JSON, nullable=False),
+    Column("created_at", Float, nullable=False))
+runs = Table("workbench_runs", metadata,
+    Column("id", String(32), primary_key=True), Column("project_id", ForeignKey(projects.c.id), nullable=False),
+    Column("status", String(24), nullable=False), Column("backend", String(16), nullable=False),
+    Column("requirements", Text, nullable=False), Column("template", String(16), nullable=False),
+    Column("max_retries", Integer, nullable=False), Column("created_at", Float, nullable=False),
+    Column("updated_at", Float, nullable=False), Column("generation", Integer, nullable=False, default=0),
+    Column("worker_id", String(64)), Column("lease_until", Float),
+    Column("tasks", JSON, nullable=False), Column("summary", JSON, nullable=False))
+events = Table("workbench_events", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("run_id", ForeignKey(runs.c.id), nullable=False, index=True),
+    Column("kind", String(32), nullable=False), Column("data", JSON, nullable=False),
+    Column("created_at", Float, nullable=False))
+workers = Table("workbench_workers", metadata,
+    Column("id", String(64), primary_key=True), Column("last_seen", Float, nullable=False),
+    Column("backends", JSON, nullable=False))
+TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
+LEASE_SECONDS = 90
+
+
+class StoreConflict(ValueError):
+    pass
+
+
+class RunStore:
+    def __init__(self, url):
+        self.engine = create_engine(url, pool_pre_ping=True)
+        metadata.create_all(self.engine)
+
+    @contextmanager
+    def transaction(self):
+        with self.engine.begin() as connection:
+            yield connection
+
+    def close(self):
+        self.engine.dispose()
+
+    @staticmethod
+    def event(db, run_id, kind, data):
+        db.execute(events.insert().values(run_id=run_id, kind=kind, data=data, created_at=time.time()))
+
+    def save_project(self, project):
+        with self.transaction() as db:
+            existing = db.scalar(select(projects.c.payload).where(projects.c.id == project["id"]).with_for_update())
+            if existing is not None:
+                protected = {key: existing['context'][key] for key in ('workspace', 'active_requirement') if key in existing.get('context', {})}
+                project = {**project, 'context': {**project.get('context', {}), **protected}}
+                db.execute(projects.update().where(projects.c.id == project["id"]).values(payload=project))
+            else:
+                if db.scalar(select(func.count()).select_from(projects)) >= 1000:
+                    raise StoreConflict("project capacity reached (1000)")
+                db.execute(projects.insert().values(id=project["id"], payload=project, created_at=time.time()))
+
+    def list_projects(self):
+        with self.transaction() as db:
+            return [row.payload for row in db.execute(select(projects).order_by(projects.c.created_at.desc()))]
+
+    def get_project(self, project_id):
+        with self.transaction() as db:
+            return db.scalar(select(projects.c.payload).where(projects.c.id == project_id))
+
+    def update_workspace(self, project_id, workspace):
+        with self.transaction() as db:
+            project = db.scalar(select(projects.c.payload).where(projects.c.id == project_id).with_for_update())
+            if project is None:
+                raise KeyError(project_id)
+            previous = project.get("context", {}).get("workspace", {})
+            if workspace["revision"] != previous.get("revision", 0):
+                raise StoreConflict("项目已被更新，请刷新后重试")
+            for milestone in workspace["milestones"]:
+                if milestone.get("run_id") and not db.scalar(select(runs.c.id).where(
+                    runs.c.id == milestone["run_id"], runs.c.project_id == project_id
+                )):
+                    raise StoreConflict("关联的运行不属于此项目")
+            workspace = {**workspace, "revision": workspace["revision"] + 1}
+            project = {**project, "context": {**project.get("context", {}), "workspace": workspace}}
+            db.execute(projects.update().where(projects.c.id == project_id).values(payload=project))
+            return project
+
+    def expire(self, db):
+        stale = db.execute(select(runs.c.id).where(runs.c.status == "RUNNING", runs.c.lease_until < time.time())
+                           .with_for_update(skip_locked=True)).scalars().all()
+        for run_id in stale:
+            summary = {"status": "FAILED", "error": "Worker lease expired; inspect evidence and start a new run"}
+            db.execute(runs.update().where(runs.c.id == run_id).values(status="INTERRUPTED", summary=summary,
+                       updated_at=time.time(), generation=runs.c.generation + 1))
+            self.event(db, run_id, "run_finished", {"status": "INTERRUPTED", "error": summary["error"]})
+
+    def create_run(self, project_id, backend, requirements, template="custom", max_retries=3):
+        now = time.time()
+        record = dict(id=uuid.uuid4().hex, project_id=project_id, status="QUEUED", backend=backend,
+                      requirements=requirements, template=template, max_retries=max_retries,
+                      created_at=now, updated_at=now, generation=0, tasks=[], summary={})
+        with self.transaction() as db:
+            if not db.scalar(select(projects.c.id).where(projects.c.id == project_id)):
+                raise KeyError(project_id)
+            if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(["QUEUED", "RUNNING"]))) >= 100:
+                raise StoreConflict("active run capacity reached (100)")
+            db.execute(runs.insert().values(**record))
+            self.event(db, record["id"], "run_queued", {"status": "QUEUED", "backend": backend})
+        return self.get_run(record["id"])
+
+    def list_runs(self, project_id=None):
+        with self.transaction() as db:
+            self.expire(db)
+            query = select(*(column for column in runs.c if column.name not in ("tasks", "requirements"))).where(runs.c.template != 'prd').order_by(runs.c.created_at.desc()).limit(200)
+            if project_id:
+                query = query.where(runs.c.project_id == project_id)
+            return [self.public(dict(row), compact=True) for row in db.execute(query).mappings()]
+
+    @staticmethod
+    def public(record, compact=False):
+        record.pop("lease_until", None)
+        record.pop("worker_id", None)
+        if compact:
+            record.pop("tasks", None)
+            record.pop("requirements", None)
+            record["summary"] = {key: value for key, value in record["summary"].items()
+                                 if key in ("status", "error", "iteration_count", "final_test_summary", "elapsed_seconds")}
+        return record
+
+    def get_run(self, run_id):
+        with self.transaction() as db:
+            self.expire(db)
+            row = db.execute(select(runs).where(runs.c.id == run_id)).mappings().first()
+            if row is None:
+                raise KeyError(run_id)
+            return self.public(dict(row))
+
+    def get_events(self, run_id, after=0):
+        with self.transaction() as db:
+            return [dict(row) for row in db.execute(select(events).where(events.c.run_id == run_id, events.c.id > after)
+                    .order_by(events.c.id).limit(200)).mappings()]
+
+    def heartbeat(self, worker_id, backends):
+        with self.transaction() as db:
+            if db.scalar(select(workers.c.id).where(workers.c.id == worker_id)):
+                db.execute(workers.update().where(workers.c.id == worker_id).values(last_seen=time.time(), backends=backends))
+            else:
+                db.execute(workers.insert().values(id=worker_id, last_seen=time.time(), backends=backends))
+            db.execute(runs.update().where(runs.c.worker_id == worker_id, runs.c.status == "RUNNING",
+                       runs.c.lease_until > time.time()).values(lease_until=time.time() + LEASE_SECONDS))
+
+    def worker_status(self):
+        with self.transaction() as db:
+            return [dict(row) for row in db.execute(select(workers).where(workers.c.last_seen > time.time() - 30)).mappings()]
+
+    def claim(self, worker_id):
+        with self.transaction() as db:
+            self.expire(db)
+            worker = db.execute(select(workers).where(workers.c.id == worker_id, workers.c.last_seen > time.time() - 30).with_for_update()).mappings().first()
+            if not worker:
+                raise StoreConflict("worker must heartbeat before claiming")
+            owned = db.execute(select(runs).where(runs.c.worker_id == worker_id, runs.c.status == "RUNNING").limit(1)).mappings().first()
+            if owned:
+                # A claim response may be lost during API restart; return the same
+                # lease to this worker rather than running a second queued job.
+                return dict(owned)
+            row = db.execute(select(runs).where(runs.c.status == "QUEUED", runs.c.backend.in_(worker["backends"]))
+                             .order_by(runs.c.created_at).with_for_update(skip_locked=True).limit(1)).mappings().first()
+            if row is None:
+                return None
+            record = dict(row)
+            record.update(status="RUNNING", worker_id=worker_id, generation=record["generation"] + 1,
+                          lease_until=time.time() + LEASE_SECONDS, updated_at=time.time())
+            db.execute(runs.update().where(runs.c.id == record["id"]).values(**record))
+            self.event(db, record["id"], "run_started", {"status": "RUNNING", "generation": record["generation"]})
+            return record
+
+    def owned(self, db, run_id, worker_id, generation):
+        row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
+        if not row:
+            raise KeyError(run_id)
+        if row["status"] != "RUNNING" or row["worker_id"] != worker_id or row["generation"] != generation or row["lease_until"] < time.time():
+            raise StoreConflict("stale or expired worker lease")
+        return row
+
+    def task_event(self, run_id, worker_id, generation, kind, task):
+        with self.transaction() as db:
+            row = self.owned(db, run_id, worker_id, generation)
+            if any(item == task for item in row["tasks"]):
+                return  # Idempotent retransmission after an HTTP disconnect.
+            current = [item for item in row["tasks"] if item["id"] != task["id"]]
+            current.append(task)
+            db.execute(runs.update().where(runs.c.id == run_id).values(tasks=current, updated_at=time.time()))
+            self.event(db, run_id, kind, {key: task.get(key) for key in ("id", "name", "capability", "status", "error")})
+
+    def finish(self, run_id, worker_id, generation, summary):
+        # Code is already stored with its task; keep list-query summaries compact.
+        summary = {key: value for key, value in summary.items() if key != "final_artifacts"}
+        with self.transaction() as db:
+            row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
+            if row and row["status"] in ("COMPLETED", "FAILED") and row["worker_id"] == worker_id and row["generation"] == generation and row["summary"] == summary:
+                return
+            self.owned(db, run_id, worker_id, generation)
+            status = "COMPLETED" if summary.get("status") == "PASS" or (row['template'] == 'prd' and summary.get('status') == 'PRD_READY') else "FAILED"
+            db.execute(runs.update().where(runs.c.id == run_id).values(status=status, summary=summary,
+                       updated_at=time.time(), lease_until=None))
+            self.event(db, run_id, "run_finished", {"status": status, "error": summary.get("error")})

@@ -38,7 +38,7 @@ def main():
         "--dest", str(wheels), "pytest==8.3.5", "docker==7.1.0", "httpx==0.28.1",
     ], check=True, timeout=180)
     client = docker.from_env(timeout=30)
-    box = DockerSandbox(os.environ.get("RD_SERVICE_IMAGE", "rd-platform-service:0.2.0-dev"),
+    box = DockerSandbox(os.environ.get("RD_SERVICE_IMAGE", "rd-platform-service:0.3.0-dev"),
                         workspace, inputs, output, client=client, timeout_seconds=120)
     summary = {"status": "FAILED", "evidence_dir": str(run), "container_removed": False}
     print(f"Evidence directory: {run}", flush=True)
@@ -62,12 +62,17 @@ def main():
         project = os.environ.get("RD_SERVICE_PROJECT", "rd-platform-service")
         containers = client.containers.list(filters={"label": f"com.docker.compose.project={project}"})
         services = {container.labels["com.docker.compose.service"]: container for container in containers}
-        if set(services) != {"api", "probe"}:
-            raise RuntimeError("Start the api/probe Compose services before validation")
+        if set(services) != {"api", "probe", "db"}:
+            raise RuntimeError("Start the api/probe/db Compose services before validation")
         summary["services"] = {}
         for name, container in services.items():
             container.reload()
             state, host = container.attrs["State"], container.attrs["HostConfig"]
+            if name == "db":
+                if state["Health"]["Status"] != "healthy":
+                    raise RuntimeError("PostgreSQL is not healthy")
+                summary["services"][name] = {"id": container.id, "health": "healthy", "image_id": container.attrs["Image"]}
+                continue
             if state["Health"]["Status"] != "healthy" or not host["ReadonlyRootfs"]:
                 raise RuntimeError(f"Unhealthy or writable-root service: {name}")
             if any(mount["Destination"] == "/var/run/docker.sock" for mount in container.attrs["Mounts"]):

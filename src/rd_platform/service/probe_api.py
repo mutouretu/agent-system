@@ -5,7 +5,7 @@ import time
 from fastapi import FastAPI, HTTPException
 from rd_platform.runtime.probe import RuntimeProbe
 
-app = FastAPI(title="R&D Runtime Probe", version="0.2.0")
+app = FastAPI(title="R&D Runtime Probe", version="0.3.0")
 _cached = None
 _expires = 0.0
 
@@ -35,7 +35,7 @@ async def health():
     report = snapshot()
     if report["status"] != "ok" or report["result"] != 16:
         raise HTTPException(503, "runtime probe self-check failed")
-    return {"status": "ok", "service": "probe", "runtime_probe": "ok", "version": "0.2.0"}
+    return {"status": "ok", "service": "probe", "runtime_probe": "ok", "version": "0.3.0"}
 
 
 @app.get("/probe")

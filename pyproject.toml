@@ -4,13 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rd-platform"
-version = "0.2.0"
+version = "0.3.0"
 description = "Isolated execution runtime for the asset-management R&D platform"
 requires-python = ">=3.11"
-dependencies = ["docker==7.1.0", "pydantic==2.14.2"]
+dependencies = ["docker==7.1.0", "pydantic==2.14.2", "httpx==0.28.1"]
 
 [project.optional-dependencies]
 test = ["pytest==8.3.5"]
+service = ["fastapi==0.162.0", "uvicorn==0.54.0", "SQLAlchemy==2.0.44", "psycopg[binary]==3.2.12"]
+
+[tool.setuptools.package-data]
+"rd_platform.service" = ["static/*"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

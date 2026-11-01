@@ -15,12 +15,13 @@ def save(path, data):
 
 
 class SoftwareTeamWorkflow:
-    def __init__(self, generator, executor, evidence_dir, *, max_retries=3, task_timeout=600):
+    def __init__(self, generator, executor, evidence_dir, *, max_retries=3, task_timeout=600, on_event=None):
         if type(max_retries) is not int or not 0 <= max_retries <= 3:
             raise ValueError("max_retries must be an integer in [0, 3]")
         self.directory = Path(evidence_dir)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.max_retries = max_retries
+        self.on_event = on_event
         registry = AgentRegistry()
         for agent in (ArchitectAgent(generator), CoderAgent(generator), ReviewerAgent(generator), TesterAgent(executor)):
             registry.register(agent)
@@ -35,9 +36,13 @@ class SoftwareTeamWorkflow:
         async def execute(task):
             project.add_task(task)
             print(f"Role {task.capability}: {task.id}", flush=True)
+            if self.on_event is not None:
+                await self.on_event("task_started", {**task.to_dict(), "status": "RUNNING"})
             before = time.monotonic()
             await self.dispatcher.dispatch_task(task, project.context, project=project)
             save(self.directory / f"{task.id}.json", {**task.to_dict(), "elapsed_seconds": time.monotonic() - before})
+            if self.on_event is not None:
+                await self.on_event("task_finished", {**task.to_dict(), "elapsed_seconds": time.monotonic() - before})
             print(f"Role result: {task.id} {task.status.value}", flush=True)
             return task
 

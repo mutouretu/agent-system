@@ -5,6 +5,7 @@ from rd_platform.agents.base import AgentInput, AgentOutput, AgentStatus, BaseAg
 from rd_platform.domain.task import json_object
 from .interfaces import ArtifactGenerator, GenerationRequest
 from .prompts import PROMPTS
+from rd_platform.llm import LLMArtifactGenerator, LLMProvider
 
 
 def input_payload(request: AgentInput, allowed: set[str]) -> dict:
@@ -46,9 +47,9 @@ def failed(exc):
 
 
 class GeneratingAgent(BaseAgent):
-    def __init__(self, metadata, generator: ArtifactGenerator | None):
+    def __init__(self, metadata, generator: ArtifactGenerator | None, *, provider: LLMProvider | None = None):
         super().__init__(metadata)
-        self.generator = generator
+        self.generator = LLMArtifactGenerator(provider) if provider is not None else generator
 
     def unavailable(self):
         return AgentOutput(status=AgentStatus.BLOCKED, error="artifact generator is not configured")

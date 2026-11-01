@@ -13,8 +13,8 @@ class ArchitectInput(Contract):
 
 @register_agent("architect")
 class ArchitectAgent(GeneratingAgent):
-    def __init__(self, generator=None):
-        super().__init__(AgentMetadata("architect", "Architect", {"architecture"}, role=ARCHITECT), generator)
+    def __init__(self, generator=None, *, provider=None):
+        super().__init__(AgentMetadata("architect", "Architect", {"architecture"}, role=ARCHITECT), generator, provider=provider)
 
     async def run(self, request: AgentInput) -> AgentOutput:
         try:

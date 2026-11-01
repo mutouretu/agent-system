@@ -1,0 +1,388 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=22mm,headheight=16pt,footskip=11mm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Noto Serif CJK SC}
+\setsansfont{Noto Sans CJK SC}
+\setmonofont{DejaVu Sans Mono}[Scale=0.86]
+\XeTeXlinebreaklocale "zh"
+\XeTeXlinebreakskip=0pt plus 1pt
+\usepackage{amsmath,amssymb,graphicx,xcolor,booktabs,longtable,array,tabularx,enumitem,fancyhdr,titlesec,tikz,fvextra,needspace,float}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+\usepackage[unicode,colorlinks=true,linkcolor=black,urlcolor=blue!45!black,citecolor=blue!45!black,breaklinks=true]{hyperref}
+\definecolor{navy}{HTML}{183B56}
+\definecolor{light}{HTML}{EEF3F7}
+\definecolor{grayline}{HTML}{D9D9D9}
+\renewcommand{\contentsname}{目录}
+\renewcommand{\figurename}{图}
+\renewcommand{\tablename}{表}
+\renewcommand{\refname}{参考资料}
+\renewcommand{\arraystretch}{1.18}
+\setlength{\tabcolsep}{4pt}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{4pt}
+\linespread{1.12}
+\widowpenalty=10000
+\clubpenalty=10000
+\raggedbottom
+\setlist[itemize]{nosep,leftmargin=1.7em,topsep=4pt}
+\setlist[enumerate]{itemsep=2pt,leftmargin=1.8em,topsep=4pt}
+\titleformat{\section}{\Large\sffamily\bfseries}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\large\sffamily\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\sffamily\bfseries}{\thesubsubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{17pt}{8pt}
+\titlespacing*{\subsection}{0pt}{12pt}{5pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily 组织架构与研发协作规范}
+\fancyhead[R]{\small\sffamily v1.2 · 2026-10-08}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\decision}[1]{\par\noindent\textbf{设计决定}\quad #1\par}
+\newcommand{\note}[1]{\par\noindent\textbf{验证边界}\quad #1\par}
+\newcommand{\source}[1]{\cite{#1}}
+\tikzset{box/.style={draw=navy,rounded corners=2pt,fill=light,align=center,font=\small\sffamily,minimum height=12mm,text width=37mm},flow/.style={-{Latex[length=2mm]},draw=navy,thick},sub/.style={font=\footnotesize\sffamily,align=center}}
+\setcounter{tocdepth}{3}
+\begin{document}
+\begin{center}
+{\LARGE\sffamily\bfseries 组织架构与研发协作规范}\par
+\vspace{5pt}
+{\small 版本 v1.2\quad 日期 2026-10-08\quad 组织建设基线}
+\end{center}
+\begingroup
+\small\setlength{\parskip}{0pt}\linespread{1.02}\selectfont
+\tableofcontents
+\endgroup
+\newpage
+\section{总则}
+\subsection{服务目标}
+组织当前以个人资产管理为核心服务目标，围绕资产研究、投资方案与策略分析、数据与技术能力、运行支持等工作，形成可持续的人机协作能力。
+
+在组织能力、服务质量和运行机制成熟后，可进一步探索面向外部提供服务。具体服务范围、责任安排和相关条件另行确定；该发展方向不表示当前已经承接外部业务。
+
+\subsection{适用范围与建设原则}
+本规范明确组织设置、职责边界、团队运行及研发协作要求，作为岗位设置、成员分工和项目组织的依据。适用于人类负责人参与、AI agent 承担相应岗位工作的组织；“人类负责人”指参与目标、重要取舍及总体方案确定的用户。
+
+组织以业务需求牵引技术建设，岗位职责持续存在，项目成员按任务配置。组织图表达职责关系，运行图表达信息、需求、成果和运行维护的交互，不能相互替代。规范不包含具体技术平台或业务项目的实现设计。
+
+\subsection{规范维护与逐步完善}
+已讨论明确的部门与机制按本规范展开，尚未明确的部门内部结构标为“待细化”。预留职能不视为已成立并运行的部门，不据图示推定其岗位、汇报关系或权限。
+
+v1.2 以个人资产管理的整体组织为起点，按“投研与策略、研发支撑”的业务顺序组织第二、三章，补充整体组织图与内外部交互图；既有研发机制保留并纳入三级目录。
+
+\section{组织设置与职责}
+\subsection{总体组织架构}
+组织整体区分面向市场的投研与策略职能、提供技术能力的研发职能，以及财务、风险管理、合规等预留职能。人类负责人参与目标与重要取舍，组织层协调工作连接部门需求、成果与待决策事项。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=4mm,box/.append style={minimum height=9mm}]
+\node[box,text width=44mm] (human) {人类负责人\\目标与重要取舍};
+\node[box,text width=44mm,below=of human] (coord) {组织层协调\\部门衔接与事项推进};
+\node[box,text width=42mm,below left=6mm and 8mm of coord] (biz) {投研与策略部\\内部结构待细化};
+\node[box,text width=42mm,below right=6mm and 8mm of coord] (rd) {研发部\\四组结构已明确};
+\node[box,dashed,fill=white,text width=29mm,below=8mm of biz,xshift=3mm] (fin) {财务职能\\预留};
+\node[box,dashed,fill=white,text width=29mm,right=9mm of fin] (risk) {风险管理职能\\预留};
+\node[box,dashed,fill=white,text width=29mm,right=9mm of risk] (legal) {合规职能\\预留};
+\draw[flow](human)--(coord);
+\draw[flow](coord.south)--++(0,-4mm)-|(biz.north);
+\draw[flow](coord.south)--++(0,-4mm)-|(rd.north);
+
+
+\end{tikzpicture}
+\caption{整体组织职责框架。下方虚线框为待细化的职能预留，不表示已任命人员或已确定其汇报关系。}
+\end{figure}
+
+\Needspace{7\baselineskip}
+\begin{longtable}{L{32mm}L{83mm}L{37mm}}
+\toprule
+部门或职能 & 总体职责定位 & 当前明确程度\\\midrule\endhead
+投研与策略部 & 对接市场信息，研究资产与候选策略，使用研发成果，提出业务需求并反馈效果。 & 职责边界明确；内部结构待细化。\\
+研发部 & 提供数据处理能力、软件、算法及技术运行支持，组织版本研发、测试和交付。 & 四组及主要协作机制已明确。\\
+财务职能 & 资产账务、费用与对账等支持方向。 & 仅预留；具体范围待讨论。\\
+风险管理职能 & 投资与业务风险识别、评价等方向。 & 仅预留；不与研发测试职能混同。\\
+合规职能 & 适用规则、业务条件与合规事项支持方向。 & 仅预留；职责及协作待讨论。\\\bottomrule
+\end{longtable}
+
+\subsection{人类负责人及组织协调职责}
+人类负责人参与组织目标、重要需求与取舍的确定，并参与研发总体技术方案和需要反复探索的过程。组织层协调工作负责部门之间的需求衔接、成果反馈和事项推进，不替代专业部门的判断。
+
+研发协调负责人对研发版本整体负责，开发组负责人负责具体技术设计与跨组技术协调。组织层协调与研发版本协调可以在初期由同一承担者兼任，但应区分其责任范围，不因兼任而取消部门和任务边界。
+
+\subsection{投研与策略部}
+\subsubsection{部门职责}
+投研与策略部面向市场与个人资产管理需求，获取和分析市场行情、项目资料、产业变化及舆情信息，形成研究问题、候选交易方案与策略，并评估业务使用效果。
+
+其工作使用研发提供的数据、软件与模型，也向研发提出能力需求。业务侧负责说明问题、使用场景和业务要求，研发负责将相关需求转化为可实现、可验证的技术能力。
+
+\subsubsection{部门边界与待细化事项}
+业务运营关注能力如何服务市场研究，技术运维关注程序、数据任务和计算环境能否正常运行。研发的技术测试通过，不等于业务必然适用或投资风险可接受。
+
+本部门内部岗位、研究与策略工作的具体组织方式，以及与交易执行、财务、风险管理和合规的进一步关系，待后续讨论。本规范暂不据此定义实盘执行流程。
+
+\subsection{研发部}
+\subsubsection{内部结构}
+
+研发部门设软件开发组、算法组、运维组和独立测试组。初期不设独立数据组，数据工作作为需求纳入相关小组，由明确的交付负责人组织完成。
+
+独立测试组统一覆盖软件开发、算法和运维相关工作，不拆分归属于各被测小组。各组按版本需求参与项目，不要求所有岗位在每个项目中同时投入。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=9mm]
+\node[box,text width=49mm] (lead) {研发协调负责人\\版本整体负责与跨组协调};
+\node[box,text width=27mm,below=13mm of lead,xshift=-54mm] (dev) {软件开发组};
+\node[box,text width=27mm,right=6mm of dev] (alg) {算法组};
+\node[box,text width=27mm,right=6mm of alg] (ops) {运维组};
+\node[box,text width=27mm,right=6mm of ops] (qa) {独立测试组};
+\draw[flow] (lead.south)--++(0,-5mm)-|(dev.north);
+\draw[flow] (lead.south)--++(0,-5mm)-|(alg.north);
+\draw[flow] (lead.south)--++(0,-5mm)-|(ops.north);
+\draw[flow] (lead.south)--++(0,-5mm)-|(qa.north);
+\end{tikzpicture}
+\caption{研发部门组织关系。测试组跨组验证，不隶属于被测组。}
+\end{figure}
+
+
+
+\subsubsection{负责人及各组职责}
+
+\Needspace{7\baselineskip}
+\begin{longtable}{L{35mm}L{119mm}}
+\toprule
+角色 & 职责\\\midrule\endhead
+人类负责人 & 参与研发目标、版本需求包、重要取舍和总体技术方案的讨论与确定；参与反复探索的研发过程。\\
+研发协调负责人 & 对版本整体负责，组织跨组依赖、进度、规格调整和最终交付；维护版本范围，协调问题与分歧。\\
+开发组负责人 & 在总体方案基础上完成具体技术设计，负责跨组技术协调，推进各组按分工实施。\\
+各组负责人 & 对本组任务、产物和协作交付负责；报告进展、依赖及需要协调的问题。\\\bottomrule
+\end{longtable}
+
+版本协调与具体技术设计是不同责任。开发组负责人承担总体技术协调，不替代算法、运维和测试各组的专业责任。
+
+\Needspace{7\baselineskip}
+\begin{longtable}{L{27mm}L{80mm}L{45mm}}
+\toprule
+小组 & 主要职责 & 主要交付物\\\midrule\endhead
+软件开发组 & 系统与工具开发，数据采集和处理程序、接口与平台能力建设，算法工程化及系统集成。 & 软件、接口、处理管线、技术设计及说明。\\
+算法组 & 问题建模、样本与标签定义、特征与方法研究、实验设计、模型训练和效果分析。 & 方法、模型、实验记录、效果与适用范围说明。\\
+运维组 & 系统和计算环境维护，稳定任务日常运行，数据时效监控、故障处理、存储与备份。 & 运行记录、维护说明、故障及恢复记录。\\
+独立测试组 & 按需求包制定测试方案和用例，组织分阶段验证，记录缺陷与复测结果，提出独立验收意见。 & 测试方案、用例、缺陷记录及测试报告。\\\bottomrule
+\end{longtable}
+
+开发与算法按所承担的问题和交付物分工，不以是否编写代码作为唯一标准。各组应完成本职工作所需的自测，并负责修复自身产物的问题；独立测试不能替代自测。
+
+
+\subsubsection{内部职责边界与跨组接口}
+
+矩阵用于界定关键事项的责任接口。“主责”承担组织推进与交付责任，“配合”提供专业输入或产物，“验证与接收”检查结果及交接条件。主责不等于独自完成全部工作，验证也不自动产生发布否决权。
+
+\Needspace{7\baselineskip}
+\begin{longtable}{L{23mm}L{32mm}L{48mm}L{48mm}}
+\toprule
+事项 & 主责 & 配合 & 验证与接收\\\midrule\endhead
+需求包与规格调整 & 研发协调负责人 & 人类负责人、相关组；业务提出需求 & 相关组确认理解与影响；测试组同步验证依据。\\
+总体技术衔接与接口 & 开发组负责人 & 算法组、运维组、测试组；人类负责人参与总体方案 & 上下游确认接口；测试组验证集成。\\
+算法研究与工程化 & 算法组负责方法及实验；开发组负责工程集成 & 双方共同确认输入输出与使用条件 & 测试组按约定验证；使用方核对适用范围。\\
+数据需求交付 & 按具体需求指定一个交付负责人 & 开发、算法、运维按职责分担 & 测试组验证；数据使用方确认口径与范围。\\
+缺陷处理 & 经定位确定的责任组 & 测试组及关联组提供复现与排查支持 & 测试组复测，关联组核对影响。\\
+版本验收与运行交接 & 研发协调负责人统筹 & 开发、算法、测试、运维；业务使用方参与 & 测试结论、运维接管条件与业务使用反馈分别列明。\\\bottomrule
+\end{longtable}
+
+问题归属或接口约定存在分歧时，由研发协调负责人组织处理；具体技术关系由开发组负责人协调，重要取舍由人类负责人参与。不得因涉及多个组而使问题失去推进负责人。
+
+
+\subsubsection{数据工作分配}
+
+数据采集、清洗、标注和数据集整理等应纳入具体需求。开发组实现工具与管线，算法组提出样本、标签和数据划分要求，运维组保障稳定运行，测试组独立验证。
+
+每项数据需求应明确最终交付负责人，按需要组织其他组参与。可复用数据的目录、来源、版本和质量记录统一管理；跨项目口径由协调负责人组织相关组讨论确定。数据处理完成与业务含义正确应分别核对，不能仅因流程运行成功就认定数据可用。
+
+
+\subsection{其他职能预留}
+财务、风险管理和合规等职能在总体架构中预留。待服务范围、业务需求与实际工作量明确后，再讨论其内部结构、职责和交互关系。当前不增加对应小组，也不预设其对研发或投研的审批、否决或执行权限。
+
+\section{团队运行与协作机制}
+\subsection{全团队运行架构}
+\subsubsection{团队运行关系图}
+团队运行围绕“外部信息进入投研、业务需求牵引研发、研发成果支持使用、反馈推动迭代”展开。人类负责人参与目标和重要取舍，组织协调连接跨部门事项；研发内部通过开发、算法、测试和运维分工完成交付。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\node[box,fill=white,text width=40mm] (market) at (-4,3.4) {外部信息\\市场行情／项目资料／舆情};
+\node[box,text width=40mm] (human) at (4,3.4) {人类负责人／组织协调\\目标、取舍与部门衔接};
+\node[box,text width=40mm] (biz) at (-4,1.25) {投研与策略部\\研究问题、方案与业务使用};
+\node[box,text width=40mm] (rd) at (4,1.25) {研发部\\开发／算法／独立测试};
+\node[box,text width=40mm] (ops) at (4,-1.0) {运维组（研发部内）\\接管、运行维护、故障反馈};
+\node[box,fill=white,text width=40mm] (resource) at (-4,-1.0) {外部技术资源\\云服务器／本地算力／运行服务};
+\node[box,dashed,fill=white,text width=112mm] (reserve) at (0,-3.1) {财务\quad 风险管理\quad 合规\qquad 职能预留、接口待细化};
+\draw[flow](market)--node[left,sub]{信息获取}(biz);
+\draw[flow](human)--node[right,sub]{技术目标与协调}(rd);
+\draw[flow](human.south west) to[out=220,in=70] node[midway,above,sub]{业务目标\\与取舍}(biz.north east);
+\draw[flow](biz.east) to[bend left=15] node[above,sub]{需求／问题\\使用反馈}(rd.west);
+\draw[flow](rd.west) to[bend left=15] node[below,sub]{数据／软件\\模型／结论}(biz.east);
+\draw[flow](rd.south) to[bend left=15] node[right,sub]{交付接管}(ops.north);
+\draw[flow](ops.north) to[bend left=15] node[left,sub]{运行问题}(rd.south);
+\draw[flow,dashed](ops.west) to[bend left=15] node[below,sub]{运行维护操作}(resource.east);
+\draw[flow](resource.east) to[bend left=15] node[above,sub]{状态／日志／告警}(ops.west);
+\end{tikzpicture}
+\caption{全团队与外部的主要交互。实线箭头表示信息、需求或成果流；虚线箭头表示运行维护操作；虚线框表示待细化职能。运维组展开绘制以显示其外部接口，并非新增部门。}
+\end{figure}
+
+图中连接表示职责交互，不代表当前已接入系统或已获得操作权限。云服务器、本地算力和运行服务仅作为外部资源类别出现，具体接入与操作方式属于后续技术设计。
+
+\subsubsection{部门之间的需求与成果流转}
+投研与策略部提出业务问题、使用条件和预期成果，研发协调负责人组织相关组理解需求、评估实现与研究工作，并纳入版本规划。研发交付的数据、软件、模型或研究结论应附适用范围及限制，由业务使用方确认使用情况并反馈。
+
+业务反馈区分既有能力的问题与新增需求：前者组织定位和处理，后者进入后续版本规划。跨部门目标或交付存在分歧时，由组织协调推进讨论，重要取舍由人类负责人参与；业务先后顺序不表示投研部门在行政上管理研发部门。
+
+\subsubsection{与外部信息及资源的交互}
+投研与策略部与市场、项目资料、产业信息和舆情等外部信息源交互，用于形成研究依据和发现问题。信息采集工具与数据处理能力可由研发提供，信息的业务解释与研究使用由投研承担。
+
+运维组与云服务器、本地计算资源及运行中的服务交互，承担已交付能力的日常运行、状态检查和故障恢复；开发与算法组提供必要技术支持。运行故障反馈研发，业务效果反馈投研，需进一步研究或开发的事项再按版本机制组织。
+
+其他职能与外部主体或系统的交互尚未确定，暂不绘制为已经运行的路径。
+
+\subsection{投研与策略部运行机制}
+\subsubsection{外部观察与业务问题}
+围绕个人资产管理目标获取市场与项目等信息，提出需要解释或验证的问题，明确研究对象、使用场景与所需能力。此处仅规定业务入口，具体岗位、方法和研究流程待细化。
+
+\subsubsection{能力使用与研发协作}
+使用已有数据、软件、模型与研究结论开展分析；能力不足时提出研发需求，说明业务问题、预期用途及约束。接收成果时核对适用范围和限制，使用后将效果与问题反馈相关研发负责人。
+
+\subsubsection{后续细化范围}
+投资研究、策略制定、业务评估及相关支持职能的内部安排另行讨论。当前保留业务与研发的接口，不预设完整交易流程，也不将候选方案自动等同于投资执行决定。
+
+\subsection{研发部运行机制}
+
+\subsubsection{版本全流程}
+版本工作依次覆盖需求规划、方案与任务拆分、开发及算法实验、集成测试、整体验收、发布交接和使用反馈。各阶段可以交叠：测试从规划开始，开发与算法研究按依赖并行，运维提前提出运行维护要求。
+
+图\ref{fig:swim} 表示各角色在不同阶段的参与关系，不能理解为每个版本必须经过全部技术活动。具体投入由需求包决定。人类负责人参与目标、需求取舍及总体方案，业务使用方参与需求说明和使用反馈。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm]
+\foreach \x/\t in {0/研发协调,2.8/软件开发,5.6/算法,8.4/独立测试,11.2/运维}{
+  \fill[light] (\x,0) rectangle (\x+2.8,0.7);
+  \node[font=\small\sffamily] at (\x+1.4,0.35) {\t};
+  \draw[grayline] (\x,0.7)--(\x,-9.1);
+}
+\draw[grayline] (14,0.7)--(14,-9.1);
+\foreach \y/\t in {-0.65/规划,-1.95/方案,-3.25/研发,-4.55/集成,-5.85/验收,-7.15/交接,-8.45/反馈}{
+ \node[font=\small\sffamily,anchor=east] at (-0.15,\y){\t};
+}
+\foreach \y in {0,-1.3,-2.6,-3.9,-5.2,-6.5,-7.8,-9.1}{\draw[grayline] (0,\y)--(14,\y);}
+\tikzset{act/.style={font=\footnotesize\sffamily,align=center,text width=25mm}}
+\node[act] at(1.4,-.65){组织需求评审\\确定需求包};
+\node[act] at(4.2,-.65){实现可行性\\与依赖评估};
+\node[act] at(7,-.65){研究问题\\与实验评估};
+\node[act] at(9.8,-.65){测试方案\\与用例规划};
+\node[act] at(12.6,-.65){运行维护\\需求评估};
+\node[act] at(1.4,-1.95){协调范围\\与跨组依赖};
+\node[act] at(4.2,-1.95){具体技术设计\\与接口协调};
+\node[act] at(7,-1.95){方法与\\实验设计};
+\node[act] at(9.8,-1.95){完善用例\\与测试准备};
+\node[act] at(12.6,-1.95){提出接管\\与维护要求};
+\node[act] at(1.4,-3.25){跟踪进展\\协调规格调整};
+\node[act] at(4.2,-3.25){开发与自测};
+\node[act] at(7,-3.25){实验与自测};
+\node[act] at(9.8,-3.25){按进度开展\\增量验证};
+\node[act] at(12.6,-3.25){环境与\\运行准备};
+\node[act] at(1.4,-4.55){协调交接\\与缺陷归属};
+\node[act] at(4.2,-4.55){集成与修复};
+\node[act] at(7,-4.55){研究产物交付\\与问题修正};
+\node[act] at(9.8,-4.55){分类测试\\与复测};
+\node[act] at(12.6,-4.55){配合运行\\维护验证};
+\node[act] at(1.4,-5.85){组织整体评审\\协调未解决项};
+\node[act] at(4.2,-5.85){明确软件版本\\与交付范围};
+\node[act] at(7,-5.85){明确研究结论\\与适用范围};
+\node[act] at(9.8,-5.85){提交测试结论\\与未解决问题};
+\node[act] at(12.6,-5.85){确认接管条件};
+\node[act] at(1.4,-7.15){统筹发布交接};
+\node[act] at(4.2,-7.15){提供发布支持};
+\node[act] at(7,-7.15){提供使用说明};
+\node[act] at(9.8,-7.15){相关验证结果\\随交付移交};
+\node[act] at(12.6,-7.15){接管稳定运行};
+\node[act] at(1.4,-8.45){组织归因\\归集后续需求};
+\node[act] at(4.2,-8.45){处理软件问题};
+\node[act] at(7,-8.45){分析方法\\与适用性问题};
+\node[act] at(9.8,-8.45){问题复现\\与回归验证};
+\node[act] at(12.6,-8.45){记录运行问题\\恢复与反馈};
+\draw[flow](-1.15,-.05)--(-1.15,-9.05);
+\end{tikzpicture}
+\caption{版本协作泳道图。自上而下表示阶段推进，同一行表示各组并行参与；具体交接内容见第\ref{sec:handoff}节。}
+\label{fig:swim}
+\end{figure}
+
+\subsubsection{需求规划与规格调整}
+研发计划按版本迭代。规划阶段统一讨论新增需求，围绕版本目标确定整体需求包，兼顾需求规模的合理性、内部相关性、依赖关系和可实现性。各组任务从需求包分解，跨组工作由研发协调负责人统筹；未纳入的需求保留至后续版本讨论。
+
+版本进入开发阶段后，不接受新需求，只允许规格调整。成员遇到问题应提交规格调整建议，不能自行加入新想法。协调负责人组织相关组检查影响，保留理由与决定记录；涉及重要取舍时，由人类负责人参与确定。测试组同步维护受影响用例，接收方同步核对交接约定。
+
+\subsubsection{常规开发与跨版本科研任务}
+\Needspace{7\baselineskip}
+\begin{longtable}{L{27mm}L{64mm}L{63mm}}
+\toprule
+任务类别 & 推进方式 & 验收及后续处理\\\midrule\endhead
+常规开发任务 & 按需求与规格开发、自测、集成和修复。 & 按约定功能与质量要求验收；必要时讨论缩减或调整规格。\\
+科研任务 & 围绕研究问题反复实验，同一任务可跨越多个版本。 & 充分证据证明效果不好也可作为验收结果；据此放弃或更换方案。\\\bottomrule
+\end{longtable}
+
+科研目标可以是验证某种方法是否有效，不应承诺效果必然提高。保留跨版本实验和决策记录，后续研究接续已有证据。研究结论的形成与可运行模型的交付分别说明：否定结论可以完成研究任务，不应据此要求一定发布模型。
+
+模型或工具针对某个需求稳定后，可接入业务流程使用，同时继续开展后续研发。稳定版本不代表适用所有场景；新增场景进入后续需求讨论，不无声扩大既有版本的范围。
+
+\subsubsection{跨组交接与集成}\label{sec:handoff}
+跨组任务应在开始前说明所需输入、预期产物、接收方与使用条件。发送文件或完成一个步骤不等于交接完成；接收方应确认资料完整、含义可理解，并能据此继续其工作。存在缺项或分歧时记录问题，由双方补齐；无法解决时交协调负责人处理。
+
+\Needspace{7\baselineskip}
+\begin{longtable}{L{29mm}L{75mm}L{48mm}}
+\toprule
+交接关系 & 交付内容 & 接收确认\\\midrule\endhead
+需求规划 → 各组 & 版本目标、需求包、范围及任务分工；测试组据此制定方案。 & 各组确认本组任务、依赖与待澄清项。\\
+算法 → 开发 & 适用的模型或方法、输入输出、预处理要求、参数说明、验证结果与限制；纯研究任务交结论。 & 开发确认工程化条件与接口，缺项反馈算法组。\\
+开发/算法 → 测试 & 明确版本的产物、变更说明、自测或实验结果、已知问题。 & 测试确认可测条件，按需求与用例验证。\\
+测试 → 责任组 & 缺陷现象、复现条件、预期与实际差异及关联需求。 & 责任组定位修复，提交修复说明；测试复测。\\
+研发 → 运维 & 可部署或运行的版本、运行与监控要求、恢复说明、已知限制和测试结果。 & 运维确认能接管及需补齐事项。\\
+研发 → 业务使用方 & 可使用的数据、软件、模型或研究结论，以及适用范围、使用说明和限制。 & 使用方确认是否满足约定需求并反馈问题。\\\bottomrule
+\end{longtable}
+
+软件开发与算法研究应提前共同确认接口，避免完成训练或开发后才发现无法集成。交接内容随任务类别取舍，未形成可运行产物的研究任务不强行走部署流程。
+
+\subsubsection{测试计划与分类验证}
+测试组在版本规划阶段介入，以需求包制定测试方案和用例，明确测试对象、预期结果和阶段安排。测试方案应能对应版本需求，规格变化后同步检查用例与覆盖。
+
+\Needspace{7\baselineskip}
+\begin{longtable}{L{29mm}L{125mm}}
+\toprule
+测试类别 & 主要验证内容\\\midrule\endhead
+功能测试 & 单项功能或能力是否满足约定规格，输入输出是否正确。\\
+集成测试 & 模块接口、数据流与跨模块完整流程是否正确协同。\\
+异常测试 & 数据缺失、接口失败、断网、超时或资源不足时的处理与恢复。\\
+压力测试 & 并发、吞吐、资源占用和持续运行的承受边界。\\\bottomrule
+\end{longtable}
+
+类别和阶段在测试方案与记录中区分，按需求及进度开展，不全部集中到版本末尾，也不要求每个任务执行全部类别。算法与运维采用适合其产物的验证内容，由统一测试组组织独立检查。
+
+\subsubsection{缺陷处理与复测}
+发现问题的一方记录现象与影响并推动定位。运维先排查运行和采集故障；程序实现问题由开发组修复，方法、标签或适用范围问题由算法组及相关业务方参与分析；数据问题按其具体需求的责任人组织处理。
+
+测试组提供复现与验证依据，不替代责任组修复。问题归属尚不明确时，由协调负责人指定牵头方，不在组间反复退回。修复后说明变更和影响，测试组复测，必要时检查关联功能，保留未解决问题。
+
+\subsubsection{版本验收与发布交接}
+研发协调负责人组织整体交付，各组提交成果和自测记录，测试组汇总验证结论及未解决问题，运维组说明部署、监控与恢复等接管条件，业务使用方反馈需求满足情况。
+
+上述结论分别呈现，不由单一组的“完成”替代整体验收。协调负责人组织处理剩余事项，重要取舍由人类负责人参与。具备交接条件的可运行成果再安排发布与接管；跨版本科研按其研究结论和已有记录衔接后续工作。
+
+\subsubsection{使用反馈与后续迭代}
+投入使用后，业务使用方反馈业务效果与新需求，运维反馈运行问题，相关研发组参与原因分析，测试组支持复现与回归验证。
+
+既有规格内的问题修复与新增需求应区分处理；新需求进入后续版本规划，不因来自使用反馈就直接加入正在开发的版本。跨组分歧由研发协调负责人组织解决，具体边界细则可在实践中逐步完善。
+
+
+\subsection{其他职能运行机制预留}
+财务、风险管理、合规等职能的运行方式与部门接口，待其职责明确后补充。届时与本章整体运行关系衔接，避免将同一事项同时交给多个部门而缺少明确负责人。
+\end{document}

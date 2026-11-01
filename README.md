@@ -1,6 +1,6 @@
-# rd-platform · 模块一
+# rd-platform · 本地研发工作台
 
-本阶段实现 `src/rd_platform/runtime/sandbox.py`。调度器、PostgreSQL 队列和 Agents SDK 适配器留待后续阶段。
+提供项目管理、软件研发团队编排、Codex 订阅/API 后端、PostgreSQL 17 持久化运行队列与 Docker 隔离执行。浏览器工作台入口为 `http://127.0.0.1:8000/`；启动方法见文末“可视化研发工作台”。
 
 ## 沙箱接口
 
@@ -47,7 +47,7 @@ python3 -m venv .venv-control
 mkdir -p sandbox-validation/wheels
 .venv-control/bin/python -m pip download --only-binary=:all: \
   --platform any --implementation py --abi none --python-version 3.12 \
-  --dest sandbox-validation/wheels docker==7.1.0 pytest==8.3.5
+  --dest sandbox-validation/wheels docker==7.1.0 pytest==8.3.5 httpx==0.28.1
 # Python 3.12 Linux ARM64 框架依赖；AMD64 将 aarch64 改成 x86_64。
 .venv-control/bin/python -m pip download --only-binary=:all: \
   --platform manylinux2014_aarch64 --platform manylinux_2_28_aarch64 \
@@ -128,7 +128,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_cli_loop.py
 
 默认每次 CLI 请求最多等待 180 秒，可通过 `--timeout` 调整到至多 600 秒；`--max-retries` 可设为 1–3。认证失效、超时、模型输出不合法或 Docker 异常会明确记录失败，不会自动读取认证文件补救。相关参数依据 [OpenAI Docs 非交互执行说明](https://learn.chatgpt.com/docs/non-interactive-mode)及[配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)，并通过本机 CLI `--help` 确认可用性。
 
-## v0.2.0 开发服务启动指南
+## v0.3.0 开发服务启动指南
 
 前置条件：Docker Desktop 已启动并使用 Linux 容器、Docker Compose v2 支持 `up --wait`，以及安装了 `docker==7.1.0` 的 `.venv-control`（Python 3.11+）。可以用 `RD_CONTROL_PYTHON` 指向已有控制面虚拟环境。首次构建需要联网下载 Python 基础镜像和二进制 Wheels；FastAPI、Uvicorn 只安装在服务镜像中。
 
@@ -166,7 +166,7 @@ API_PORT=8080 PROBE_PORT=8081 ./scripts/deploy.sh start
 .venv-control/bin/python examples/client_demo.py --api-url http://127.0.0.1:8080 --probe-url http://127.0.0.1:8081
 ```
 
-`SERVICE_UID` / `SERVICE_GID` 默认使用调用用户的 UID/GID，Linux 上须确保该用户可写数据和日志目录；脚本不修改系统权限。`RD_SERVICE_IMAGE` 可覆盖默认镜像名 `rd-platform-service:0.2.0-dev`。Compose 文件使用已构建的镜像，如需直接调用 Compose，请先运行 `scripts/build_service_image.py` 并创建挂载目录。
+`SERVICE_UID` / `SERVICE_GID` 默认使用调用用户的 UID/GID，Linux 上须确保该用户可写数据和日志目录；脚本不修改系统权限。`RD_SERVICE_IMAGE` 可覆盖默认镜像名 `rd-platform-service:0.3.0-dev`。Compose 文件使用已构建的镜像，如需直接调用 Compose，请先运行 `scripts/build_service_image.py` 并创建挂载目录。
 
 容器内回归与实际服务验收（先启动服务）：
 
@@ -207,7 +207,7 @@ PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_service.py
 
 示例创建“排序去重 → 统计”任务图，成功输出 `PASS`，下游 mean 为 2。验证控制器在容器中执行所有单元与服务测试，并分别调用原服务示例和项目示例，保存 `project-client.json` 作为真实 HTTP 调度证据。
 
-当前项目存储是进程内字典：每个应用最多 100 个项目、每个项目最多 100 个任务，服务重启后丢失；须保持 Compose 中的单 worker 配置。该实现适用于本地开发，不提供 PostgreSQL 持久化队列、分布式租约或跨进程调度。自定义 Agent 通过 Python 注册（或注入 `create_app(..., registry=...)`），HTTP 请求不能注册代码或修改调度状态。
+项目定义和已完成的调度结果现已存入 PostgreSQL，服务重启后可恢复查看。原 `/dispatch` 仍是单进程同步示例接口；工作台使用下面新增的 `/v1/runs` 后台运行队列。须保持 API 单 worker 配置。自定义 Agent 通过 Python 注册（或注入 `create_app(..., registry=...)`），HTTP 请求不能注册 Python 类或上传控制面代码。
 
 `create_default_registry()` 从 `AGENT_REGISTRY` 类目录创建独立的 Agent 实例。两个通用示例通过装饰器注册，也可通过 `create_app(..., registry=...)` 注入自定义注册表。
 
@@ -275,7 +275,7 @@ Tester 仅调用注入的 `SandboxExecutor.run_tests(CoderArtifacts)`，不会�
 前置条件为 Linux Docker、兼容的已登录 Codex CLI、已缓存的 `python:3.12-slim` 和本文“本地验证”所述 pytest Wheels。控制面虚拟环境额外安装 Pydantic，仅用于固定协议和编排逻辑：
 
 ```sh
-.venv-control/bin/python -m pip install --only-binary=:all: docker==7.1.0 pydantic==2.14.2
+.venv-control/bin/python -m pip install --only-binary=:all: docker==7.1.0 pydantic==2.14.2 httpx==0.28.1
 PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python examples/software_team_demo.py
 # 可选：--codex /absolute/path/to/codex --model MODEL --timeout 180 --max-retries 3
 ```
@@ -297,3 +297,126 @@ JUnit 使用实际 testcase 统计，拒绝实体声明、超大报告和符号�
 - `sandbox/tests-*/`：候选代码、每个测试集的文件清单/哈希、安装日志、pytest stdout/stderr、JUnit、隔离配置及删除记录。
 
 `tests/unit/test_software_team.py` 用显式 Fake 验证成功、拒绝、失败反馈修复及最大轮数，并验证 CLI JSON 传输和报告读取约束。真实 CLI/Docker 演示通过上述命令单独执行，常规单元测试不消耗模型调用。
+
+## 统一 LLM Provider 与真实 API 演示
+
+`src/rd_platform/llm/` 提供异步 `LLMProvider.generate(system_prompt=..., input_data=..., output_schema=...)` 和 `LLMResponse(content, structured_data, token_usage)`。`OpenAIProvider` 使用 httpx 调用 API 根路径下的 `/chat/completions`，支持自定义模型和兼容服务地址。它仅接收 JSON 文本，不执行模型返回的工具或代码。默认 JSON mode 保证的范围是 JSON 格式；具体产物仍由各角色 Pydantic Schema 校验。参见 [OpenAI Chat Completions 官方接口文档](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。
+
+控制面依赖安装和运行方式（生成代码与 pytest 仍只在 Docker 中执行）：
+
+```sh
+.venv-control/bin/python -m pip install --only-binary=:all: docker==7.1.0 pydantic==2.14.2 httpx==0.28.1
+# 在本地环境安全设置 OPENAI_API_KEY；不要将密钥写进源码或提交配置文件。
+export LLM_BASE_URL=https://api.openai.com/v1
+export LLM_MODEL=gpt-4o
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python examples/live_llm_team_demo.py
+# 原演示保留订阅 CLI 默认值；显式选择 API 后端也可运行：
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python examples/software_team_demo.py --backend llm --mode live
+```
+
+`--mode auto`（默认）在缺少密钥时输出 `SKIPPED`，退出码为 0，不调用模型、不启动测试容器。`--mode live` 将缺少密钥视为失败并返回非零退出码。配置错误、鉴权失败、限流、网络错误和无效模型输出均失败，不自动切换成 Fake。只能校验配置形式；密钥是否被服务接受由实际请求确定。ChatGPT 订阅 CLI 登录与这里的 API Key 是独立的两种后端。
+
+`create_provider(config_file=...)` 和 Demo 的 `--config` 支持 JSON 文件，也可设置 `LLM_CONFIG_FILE`。示例见 `examples/llm_config.example.json`。优先级为显式工厂参数 > 环境变量 > JSON 文件 > 默认值。没有隐式读取 dotenv、认证目录或 Python 配置代码。
+
+| 环境变量 | JSON 字段 / 默认值 |
+| --- | --- |
+| OPENAI_API_KEY | api_key；默认必需 |
+| LLM_BASE_URL | base_url；https://api.openai.com/v1 |
+| LLM_MODEL | model；gpt-4o |
+| LLM_TIMEOUT | timeout；180 秒，整次调用期限，最大 600 秒 |
+| LLM_MAX_TOKENS | max_tokens；8192 |
+| LLM_RESPONSE_FORMAT | response_format；json_object 或 text |
+| LLM_REQUIRE_API_KEY | require_api_key；true |
+
+DeepSeek / Qwen / vLLM 等服务使用其实际 API 根路径和模型名称；兼容性取决于对应服务支持的 Chat Completions 参数。若不支持 `response_format`，显式设置 `LLM_RESPONSE_FORMAT=text`，此时仍要求模型返回单个 JSON 对象并在本地严格解析。无鉴权的自建端点可以显式设置 `LLM_REQUIRE_API_KEY=false`，同时设置自己的 `LLM_BASE_URL` 和 `LLM_MODEL`；不向端点发送空 Authorization。Provider 不自动跟随重定向、不读取代理环境变量、不自动重试计费请求。
+
+Agent 可以优先注入 Provider，原来的 ArtifactGenerator/Fake 接口保持兼容：
+
+```python
+from rd_platform.llm import create_provider, LLMArtifactGenerator
+from rd_platform.agents.dev import ArchitectAgent, CoderAgent, ReviewerAgent
+
+provider = create_provider()
+architect = ArchitectAgent(provider=provider)
+coder = CoderAgent(provider=provider)
+reviewer = ReviewerAgent(provider=provider)
+# 给现有 SoftwareTeamWorkflow 的 generator 参数传入此适配器：
+generator = LLMArtifactGenerator(provider)
+```
+
+当同时传入 generator 和 provider 时，provider 优先。无后端的 Agent 仍为 BLOCKED；Provider 的分类异常在直接调用时抛出，在 Agent 边界转换为 FAILED。HTTP 错误不保存响应正文、请求头或密钥。截断、拒绝、工具调用、非 JSON、重复字段及非有限数值不能成为成功产物；HTTP 响应上限为 2 MiB。返回的 token_usage 保留服务提供的 prompt/completion/total 计数，缺失时保持空字典。
+
+API 演示复用方案 B 的工作流与两个独立 Docker 测试容器，最多 3 次修订。证据保存到 `sandbox-validation/live-llm-team-*/`：`summary.json` 记录状态、角色调用耗时、Token 用量及测试汇总；`workflow/` 保存各角色产物；`sandbox/` 保存候选源码、生成测试与固定验收测试的日志/JUnit/回收记录。未配置时只留下明确的跳过摘要。Mock 网络回归位于 `tests/unit/test_llm_provider.py`，通过 `scripts/validate_service.py` 在禁网 Docker 中执行，不消耗真实模型调用。
+
+## 可视化研发工作台
+
+在已有控制面虚拟环境、离线 pytest Wheels 和 Codex 订阅登录的基础上，一条命令启动：
+
+```sh
+./scripts/workbench.sh
+```
+
+浏览器打开 **http://127.0.0.1:8000/**。保持终端运行：此命令先通过 Docker SDK 构建服务镜像，再启动 Compose 的 API、探针、PostgreSQL 17，最后以前台方式运行可信本地 Worker。默认使用已登录的 Codex/ChatGPT 订阅，无需 API Key；也可在 Worker 启动前配置上一节的 LLM 环境变量，然后在页面选择 API 后端。
+
+若服务已启动，可以单独运行 Worker：
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/workbench_worker.py
+# 回归：pytest 始终在 Docker 中运行
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_service.py
+# PostgreSQL 并发/租约验证也通过 SDK 在 Linux 服务容器内执行
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_workbench.py
+```
+
+工作台包含项目列表、需求提交、四角色流程状态、执行动态、历史运行选择、代码/JSON 产物查看、pytest 日志和运行记录导出。SSE 推送角色开始/结束和运行结果，支持 Last-Event-ID 重连补读；不是模型逐 Token 流。产物作为文本展示，不在浏览器执行生成的 HTML 或 JavaScript。
+
+两种任务入口：**LRU Cache 示例**使用仓库内固定需求及独立验收测试；**自定义任务**支持 Python 3.12 标准库，代码仅在 `src/`、测试仅在 `tests/`，不安装模型指定的外部依赖。自定义任务通过的是模型生成测试，页面明确显示这一验收范围，不代表独立业务验收。
+
+| 接口 | 用途 |
+| --- | --- |
+| GET /v1/projects、GET /v1/projects/{id} | 持久化项目列表及详情 |
+| POST /v1/runs | 提交后台任务，返回 202 和运行 ID |
+| GET /v1/runs、GET /v1/runs/{id} | 最近 200 次运行及完整详情 |
+| GET /v1/runs/{id}/events | 可重连的 SSE 事件流 |
+| GET /v1/runs/{id}/artifacts | 结构化产物与源码文本 |
+| GET /v1/workbench | 在线 Worker、后端与数据库状态 |
+
+执行边界：API 和 PostgreSQL 位于 Docker Compose 中；API 不挂载 Docker socket 或 Codex 认证目录。可信本地 Worker 通过仅本机的 HTTP 接口领取任务，使用已有 Codex CLI 和 Docker SDK；候选代码的导入、编译、测试全部留在禁网沙箱中。`data/.workbench-worker-token` 是应用自己创建的 Worker 接口凭据，不读取系统/Codex 认证文件，不向浏览器提供，不进入 Git。页面不接受 API Key、Shell 命令或宿主机文件路径。
+
+队列使用 SQLAlchemy + PostgreSQL `FOR UPDATE SKIP LOCKED`，每次领取分配代次，90 秒租约、每 8 秒心跳续租。领取与结果回传支持同一 Worker 的幂等重传。租约过期标记 INTERRUPTED，旧代次不能回写，不自动重复执行可能已产生副作用的任务；页面可创建新运行重试。PostgreSQL 数据位于 Compose 的 `workbench-db` 命名卷，普通 stop/start 保留数据；本地证据位于 `sandbox-validation/workbench-worker-*/<run-id>/`。
+
+停止时在 Worker 终端按 Ctrl-C，它停止领取并在当前有界操作结束后退出；再执行 `./scripts/deploy.sh stop` 停止服务并保留数据库卷。不要用 `down -v` 删除需要保留的运行历史。
+
+本版本定位为单用户本机工作台：仅发布 127.0.0.1 端口，PostgreSQL 不发布宿主机端口，数据库开发密码只用于 Compose 内部，浏览器侧未实现多用户认证。SQLite 仅用于隔离单元测试，不作为部署队列。建表使用 `create_all`，后续变更数据库结构需加入迁移。跨机器 Worker、运行中即时取消、Git 仓库编辑和任意语言构建尚未提供。
+
+### 项目交付仪表盘
+
+```bash
+python examples/web_dashboard.py
+# 不自动打开浏览器，或指定端口：
+python examples/web_dashboard.py --no-open --port 8000
+```
+
+启动器只使用 Python 标准库，调用既有 Docker 服务部署控制器；需要 Docker Desktop、Compose 与 `.venv-control`（安装 docker SDK）。数据库及服务仍在容器中运行，打开 `http://127.0.0.1:8000/`。执行模型任务另需本地 Worker（`./scripts/workbench.sh`）。
+
+本阶段仅实现前端，未新增后端接口或修改调度逻辑。首页支持按项目 ID、名称、业务目标搜索，复用 `/v1/projects` 和 `/v1/runs`。新建弹窗通过现有项目接口保存业务需求、首个里程碑、待交付需求包与后端偏好，进入研发空间后由用户启动任务；`cli` 对应现有 `codex` 模式。
+
+前端适配项目可选的 `context.delivery`：`milestone` 和 `packages`。仅明确登记 `status=COMPLETED` 的需求包计为交付；自动测试通过只显示“待审核”。历史项目无需求包时显示“未登记”，不推断为完成。业务验收、需求包与运行关联，以及全量交付聚合留待后端对齐。
+
+耗时暂按现有接口返回的最近 200 次运行汇总；交付周期暂按已交付需求包关联运行耗时均值展示，无有效数据则显示空值。统计栏不随搜索过滤。项目入口复用三层研发空间（需求与协作、Agent 团队、代码与证据），不虚构独立 Team Lead 服务。
+
+### 单项目协同工作区
+
+从项目列表进入项目 UI，或访问 `/#project/<project_id>`。上层展示真实角色交接与架构产物（流程、接口和验收清单），中层为需求提交和 Team Lead 状态汇总，下层支持里程碑、目标、需求包和关联运行的编辑。技术日志、源码与证据默认折叠。
+
+工作区规划及人工验收通过 `PUT /v1/projects/{id}/workspace` 持久化到项目存储，带 revision 乐观并发检查；验收按运行版本记录。运行状态通过已有 Worker 上报、SSE 和 10 秒轮询更新，不直接开放宿主机证据目录。进度表示关联运行的研发阶段完成情况，不代表逐需求包的业务验收完成。
+
+Team Lead 当前是基于真实状态的汇总界面，并非新增独立模型角色。每次发送仍创建独立研发运行，不能中途插入指令，也不会自动继承上轮代码；运行期间可编写下一轮草稿。角色对话呈现阶段交接及产物摘要，不展示模型内部思维过程。
+
+### Requirement Studio / PRD 工作台
+
+项目右上角“编写研发需求”或项目列表“编辑需求”进入 `/#requirements/<project_id>/<req_id>`。支持原始 Markdown 导入、多轮 Architect 调整、模块折叠与双列功能卡片、P0/P1/P2 筛选、业务验收清单、草稿保存和提交研发。表单完整度为确定性字段检查；模型完整度与风险清单单独标注，不伪装实时模型审校。
+
+PRD 持久化在 `workbench_requirements` 表；版本冲突返回 409。保存会同步项目交付面板，提交在同一数据库事务内保存需求、创建队列任务、关联里程碑。AI 拆解使用独立 `prd` 队列任务与严格 JSON Schema，不执行代码、不伪造测试通过证据。原始草稿可以先保存，提交执行必须满足完整 PRD 契约。
+
+升级后启动新版 `scripts/workbench_worker.py`（或重新启动 `scripts/workbench.sh`）以注册 `prd_codex` / `prd_llm` 能力。旧 Worker 不能领取 PRD 分析任务；没有对应 Worker 时返回明确提示。真实模型生成的业务代码仍仅在 Docker 中验证。

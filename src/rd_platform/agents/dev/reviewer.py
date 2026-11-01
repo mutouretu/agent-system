@@ -7,8 +7,8 @@ from .schemas import ArchitectArtifacts, CoderArtifacts, ReviewDecision, Reviewe
 
 @register_agent("reviewer")
 class ReviewerAgent(GeneratingAgent):
-    def __init__(self, generator=None):
-        super().__init__(AgentMetadata("reviewer", "Reviewer", {"review"}, role=REVIEWER), generator)
+    def __init__(self, generator=None, *, provider=None):
+        super().__init__(AgentMetadata("reviewer", "Reviewer", {"review"}, role=REVIEWER), generator, provider=provider)
 
     async def run(self, request: AgentInput) -> AgentOutput:
         try:

@@ -38,6 +38,12 @@ def check_ports(client):
 def build(client):
     from docker.errors import ImageNotFound
 
+    try:
+        client.images.get("postgres:17")
+    except ImageNotFound:
+        print("Provisioning PostgreSQL 17 via Docker SDK", flush=True)
+        client.images.pull("postgres:17")
+
     base = "python:3.12-slim"
     try:
         image = client.images.get(base)
@@ -55,7 +61,7 @@ def build(client):
         "--python-version", "3.12", "--implementation", "cp", "--abi", "cp312",
         "--dest", str(wheels), "-r", str(ROOT / "requirements-service.txt"),
     ], check=True, timeout=180)
-    tag = os.environ.get("RD_SERVICE_IMAGE", "rd-platform-service:0.2.0-dev")
+    tag = os.environ.get("RD_SERVICE_IMAGE", "rd-platform-service:0.3.0-dev")
     with tempfile.TemporaryDirectory(prefix="build-", dir=CACHE) as temporary:
         context = Path(temporary)
         for name in ("Dockerfile.service", "requirements-service.txt"):

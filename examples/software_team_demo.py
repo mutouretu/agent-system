@@ -80,13 +80,21 @@ class CodexArtifactGenerator:
         return artifact
 
 
-def main():
+def main(argv=None):
+    # Preserve the subscription CLI default; API credentials are opt-in here.
+    selector = argparse.ArgumentParser(add_help=False)
+    selector.add_argument("--backend", choices=("cli", "llm"), default="cli")
+    selected, remaining = selector.parse_known_args(argv)
+    if selected.backend == "llm":
+        from examples.live_llm_team_demo import main as live_main
+        return live_main(remaining)
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--backend", choices=("cli", "llm"), default="cli")
     parser.add_argument("--codex")
     parser.add_argument("--model")
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--max-retries", type=int, choices=range(4), default=3)
-    args = parser.parse_args()
+    args = parser.parse_args(remaining)
     if not 1 <= args.timeout <= 600:
         parser.error("timeout must be in [1, 600]")
     directory = ROOT / "sandbox-validation" / f"software-team-{uuid.uuid4().hex}"

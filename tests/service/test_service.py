@@ -79,7 +79,8 @@ def test_models_and_readiness(service):
     (settings.models / "weight.bin").write_bytes(b"sample")
     (settings.models / "link").symlink_to(settings.models / "weight.bin")
     assert client.get("/v1/models").json() == {"models": ["weight.bin"], "read_only": True}
-    settings.data.rmdir()
+    # Workbench persistence now occupies the data mount; simulate losing the mount.
+    settings.data.rename(settings.data.with_name("data-unavailable"))
     assert client.get("/health").status_code == 503
 
 

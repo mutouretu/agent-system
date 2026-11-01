@@ -73,12 +73,12 @@ def main():
             "USER 0:0\n"
             "COPY wheels/ /opt/validation-wheels/\n"
             "RUN python -m pip install --no-index --no-cache-dir --no-compile "
-            "--find-links=/opt/validation-wheels pydantic==2.14.2 "
+            "--find-links=/opt/validation-wheels pydantic==2.14.2 httpx==0.28.1 "
             "&& rm -rf /opt/validation-wheels\n"
         )
         print("Preparing native framework dependencies in a network-disabled Docker image", flush=True)
         prepared, _ = client.images.build(path=str(build_dir), network_mode="none", rm=True, forcerm=True,
-                                          tag="rd-platform-validation:0.2.0")
+                                          tag="rd-platform-validation:0.3.0")
         image = prepared.id
         (run_dir / "image.json").write_text(json.dumps({"base_image_id": base_image.id, "image_id": image,
                                                        "build_network": "none"}, indent=2))
@@ -128,7 +128,7 @@ def main():
                 print(stdout + stderr, flush=True)
                 return code
             code, stdout, stderr = box.exec_run([
-                "/usr/bin/env", "PYTHONPATH=/tmp/deps:/workspace/src",
+                "/usr/bin/env", "PYTHONPATH=/tmp/deps:/workspace/src:/workspace",
                 "SANDBOX_EVIDENCE=/input/evidence.json", "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
                 "python", "-m", "pytest", "-q", "-p", "no:cacheprovider",
                 "--junitxml=/output/pytest.xml", "/workspace/tests",

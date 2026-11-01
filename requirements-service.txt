@@ -1,5 +1,9 @@
 fastapi==0.162.0
 uvicorn==0.54.0
+httpx==0.28.1
+SQLAlchemy==2.0.44
+greenlet==3.2.4
+psycopg[binary]==3.2.12
 # Pin the resolved runtime dependencies for repeatable local builds.
 annotated-doc==0.0.5
 annotated-types==0.8.0
