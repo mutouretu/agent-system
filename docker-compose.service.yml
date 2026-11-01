@@ -1,0 +1,72 @@
+name: rd-platform-service
+
+x-service: &service
+  image: ${RD_SERVICE_IMAGE:-rd-platform-service:0.2.0-dev}
+  pull_policy: never
+  user: "${SERVICE_UID:-1000}:${SERVICE_GID:-1000}"
+  init: true
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  cpus: 2.0
+  mem_limit: 1g
+  memswap_limit: 1g
+  pids_limit: 128
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,size=64m,mode=1777
+  networks: [service]
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "3"
+  stop_grace_period: 15s
+
+services:
+  api:
+    <<: *service
+    command: [python, -m, uvicorn, "rd_platform.service.api:app", --host, "0.0.0.0", --port, "8000", --workers, "1"]
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    environment:
+      RD_DATA_DIR: /app/data
+      RD_LOG_DIR: /app/logs
+      RD_MODELS_DIR: /app/models
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./logs
+        target: /app/logs
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./models
+        target: /app/models
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD, python, -m, rd_platform.service.healthcheck, "http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 6
+  probe:
+    <<: *service
+    command: [python, -m, uvicorn, "rd_platform.service.probe_api:app", --host, "0.0.0.0", --port, "8001", --workers, "1"]
+    ports:
+      - "127.0.0.1:${PROBE_PORT:-8001}:8001"
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -m, rd_platform.service.healthcheck, "http://127.0.0.1:8001/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 6
+
+networks:
+  service:
+    driver: bridge

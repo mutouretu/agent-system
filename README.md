@@ -122,3 +122,51 @@ PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_cli_loop.py
 - `sandbox/iteration-NN/`：真实 pytest 输出、JUnit、固定测试、代码快照和容器删除记录。
 
 默认每次 CLI 请求最多等待 180 秒，可通过 `--timeout` 调整到至多 600 秒；`--max-retries` 可设为 1–3。认证失效、超时、模型输出不合法或 Docker 异常会明确记录失败，不会自动读取认证文件补救。相关参数依据 [OpenAI Docs 非交互执行说明](https://learn.chatgpt.com/docs/non-interactive-mode)及[配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)，并通过本机 CLI `--help` 确认可用性。
+
+## v0.2.0 开发服务启动指南
+
+前置条件：Docker Desktop 已启动并使用 Linux 容器、Docker Compose v2 支持 `up --wait`，以及安装了 `docker==7.1.0` 的 `.venv-control`（Python 3.11+）。可以用 `RD_CONTROL_PYTHON` 指向已有控制面虚拟环境。首次构建需要联网下载 Python 基础镜像和二进制 Wheels；FastAPI、Uvicorn 只安装在服务镜像中。
+
+```sh
+./scripts/deploy.sh start
+.venv-control/bin/python examples/client_demo.py
+./scripts/deploy.sh status
+./scripts/deploy.sh logs       # 持续查看日志，Ctrl-C 退出日志查看
+./scripts/deploy.sh stop
+```
+
+`start` 检查 Docker、虚拟环境和端口，自动创建 `data/`、`logs/`、`models/`，通过 Python Docker SDK 构建镜像，再等待两个服务健康并验证宿主机端口、打印日志。Docker 构建阶段使用离线 Wheels 且禁网；宿主机不运行 pytest、算法任务或构建依赖源码。重复启动会检查并更新本项目的容器，其他进程占用端口时明确报错，不会结束该进程。启动失败可运行 `logs` 排查，`stop` 回收容器和网络，保留本地数据。
+
+| 服务 | 默认地址 | 用途 |
+| --- | --- | --- |
+| API | `http://127.0.0.1:8000/health` | 存储目录与应用就绪检查 |
+| OpenAPI | `http://127.0.0.1:8000/docs` | 请求格式及交互调用 |
+| 探针 | `http://127.0.0.1:8001/health` | 执行现有 RuntimeProbe 的固定自检 |
+| 探针报告 | `http://127.0.0.1:8001/probe` | 有预算限制的上下文采样报告，缓存 5 秒 |
+
+`examples/client_demo.py` 仅依赖 Python 标准库，检查两个健康接口、执行记录过滤、写入并读回 `demo` 数据集、列出模型文件，成功输出 `"status": "PASS"`。每次运行会覆盖 `data/demo.json`。
+
+开发 API 提供以下固定能力：
+
+- `POST /v1/algorithms/filter`：输入 `records`（每条含字符串 `id`、整数 `score`、可选布尔值 `active`），可选 `min_score`、`limit`。保留活跃且分数大于等于阈值的记录，同 ID 取最高分，按分数降序、ID 升序排序；`limit=0` 返回空列表。
+- `PUT /v1/data/{name}`、`GET /v1/data/{name}`：原子写入及读取 JSON 数据集，写入返回 SHA-256。名称限 1–64 位字母、数字、下划线、连字符；请求最多 1 MiB、记录最多 1,000 条。
+- `GET /v1/models`：列出 `models/` 下最多 100 个普通文件，不加载或执行模型文件。
+
+API 挂载 `./data`、`./logs` 为可写目录，`./models` 为只读目录；日志同时提供容器 stdout 和轮转的 `logs/service.log`。两个服务均使用非 root 用户、只读根文件系统、资源限制及独立桥接网络，端口仅发布到本机回环地址。服务桥接网络允许出网；执行动态任务的原有 DockerSandbox 仍使用 `NetworkMode=none`。探针独立运行于单进程容器，避免其 Python 流重定向影响 API 请求。服务没有挂载 Docker socket，也没有动态代码、Shell 或上传执行接口。此阶段提供本地开发调用入口；任务队列、模型推理加载、订阅 Agent 调度仍需后续接入，无需 API Key 即可运行示例。
+
+可调整端口和运行用户（后续操作应沿用相同环境变量）：
+
+```sh
+API_PORT=8080 PROBE_PORT=8081 ./scripts/deploy.sh start
+.venv-control/bin/python examples/client_demo.py --api-url http://127.0.0.1:8080 --probe-url http://127.0.0.1:8081
+```
+
+`SERVICE_UID` / `SERVICE_GID` 默认使用调用用户的 UID/GID，Linux 上须确保该用户可写数据和日志目录；脚本不修改系统权限。`RD_SERVICE_IMAGE` 可覆盖默认镜像名 `rd-platform-service:0.2.0-dev`。Compose 文件使用已构建的镜像，如需直接调用 Compose，请先运行 `scripts/build_service_image.py` 并创建挂载目录。
+
+容器内回归与实际服务验收（先启动服务）：
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_service.py
+```
+
+该控制器通过 Docker SDK 在禁网、只读工作区的临时沙箱执行基础单元测试、服务测试和脚本语法检查，再在 API 容器中运行客户端验证独立探针和数据服务，检查宿主机发布端口。证据输出到 `sandbox-validation/service-*/`，含 JUnit、stdout/stderr、服务日志及 `summary.json`；临时测试容器自动销毁，Compose 服务由 `deploy.sh stop` 停止。

@@ -1,0 +1,15 @@
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
+WORKDIR /app
+# The SDK build helper prepares these wheels; RUN needs no network.
+COPY wheels/ /tmp/wheels/
+COPY requirements-service.txt /app/requirements-service.txt
+RUN python -m pip install --no-index --no-cache-dir --no-compile \
+    --find-links=/tmp/wheels -r /app/requirements-service.txt \
+    && rm -rf /tmp/wheels
+COPY src/ /app/src/
+COPY examples/ /app/examples/
+USER 1000:1000
+EXPOSE 8000 8001
+CMD ["python", "-m", "uvicorn", "rd_platform.service.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
