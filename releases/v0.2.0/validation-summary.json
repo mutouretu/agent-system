@@ -1,0 +1,58 @@
+{
+  "status": "PASS",
+  "version": "0.2.0",
+  "tag": "v0.2.0",
+  "generated_at": "2026-11-01T15:43:45+08:00",
+  "provenance": "local Docker pytest evidence aggregation; not a signed remote CI run",
+  "original_evidence_directories": {
+    "base": "sandbox-validation/run-1875d10fb2a1449f89c833ab40dedfad",
+    "chaos": "sandbox-validation/chaos-f45899b9c8f54ea28b5b0d7dd5a3bb62",
+    "probe": "sandbox-validation/probe-69b6afc9bfa94509b722592febe7fd78"
+  },
+  "suite_results": {
+    "base": {
+      "tests": 78,
+      "passed": 68,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 10
+    },
+    "chaos": {
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "probe": {
+      "tests": 17,
+      "passed": 17,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "raw_testcase_observations": 100,
+  "raw_passed_observations": 90,
+  "unique_tests": 78,
+  "unique_passed": 78,
+  "unique_failed": 0,
+  "unresolved_skipped": 0,
+  "initial_skips_resolved": 10,
+  "final_pass_rate": "100%",
+  "corrected_breakdown": {
+    "base_passed": 68,
+    "additional_chaos": 5,
+    "additional_probe_integration": 5
+  },
+  "source_snapshot_match": true,
+  "archive_files_verified": 86,
+  "archive_sha256": "d67ab7198ee09e4e53c9c6d8445fd84fe5294dedefff59f9300bb2da580dceb9",
+  "limitations": [
+    "Requested 68+8+2 categorization does not match JUnit; actual unique breakdown is 68+5+5.",
+    "Probe's 17 passes include 12 unit tests already counted in the base suite.",
+    "Base controller did not persist standalone stdout/stderr; original JUnit and evidence.json are retained without fabricated logs.",
+    "Packaging utility and release metadata were added after the test runs; validated source hashes remain unchanged.",
+    "This aggregation does not rerun tests and does not certify unrelated online CLI runs."
+  ]
+}
