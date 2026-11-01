@@ -1,0 +1,29 @@
+{
+  "validated_snapshot_matches": {
+    "src/rd_platform/__init__.py": "1be8e31db050c9388ba3d8c9701f539796bcf37af9dd4ca92ad246f02a795f58",
+    "src/rd_platform/runtime/__init__.py": "2f26f0979f6496b324a38d79080acc4ada4db65c62974022017bf0de39d65a8a",
+    "src/rd_platform/runtime/probe.py": "ffd6a58b96828d1eb31fbe536eb8d081d122256bead46a051781fb251ebb9b6f",
+    "src/rd_platform/runtime/sandbox.py": "b7f4f9c1f9508aea2148d83c7edc7646c6233e139f1d109f505246bcf1412a1a",
+    "tests/fixtures/probing/benchmark.py": "40454d3e68d4491fff2b2126dc82e2000ee0bdef02ac383f0df5836832623d44",
+    "tests/fixtures/probing/workload.py": "aaef6e2359d024df15ba80c2dd715842c23a6d2a066bc5eb57db4cfcab590878",
+    "tests/fixtures/self_correction/contract.py": "d79f1dceb7ff62a9028ca19422543ff511d6a6dac1bfdf84b3962472bdce2ebd",
+    "tests/fixtures/self_correction/initial.py": "f64ba1cda42d95eea6ccaf5317feea68c1a7c6322f29f278e7d5e5f51e966d16",
+    "tests/fixtures/self_correction/revision_01.py": "de776dfd6499614dec73641a55d045b7543d899654f59540e62145189acd265f",
+    "tests/fixtures/self_correction/task.md": "a7312a104af22b62e36623a21765ab8874253d3937eca19346c9293cb563bf5a",
+    "tests/integration/test_probe_evidence.py": "05b8a57be5abd74f95faf969bff103e8abf79a52c6339753a09a4bc607158ae7",
+    "tests/integration/test_sandbox_evidence.py": "7223a034f6ffa2fd3f31e4e093496431c1ba1c85527c06d6e0ce6462edd443bd",
+    "tests/probes/runtime_probe.py": "77f7c159d991976d8767e4eca190676b46411c34f204f97dbfb15057a3d4e665",
+    "tests/test_sandbox_chaos.py": "b88e68268bf82713fb99044100c7d1b1aa290e0e2cc8d7e5410ce2c428550050",
+    "tests/unit/test_cli_loop.py": "eb6e13f591ebf638318a5595ed3857194565bcf6988014f5776c21f3c8fff4da",
+    "tests/unit/test_probe.py": "265dfe0943eec712fea658fcf776a2ad4508d3f379a0ec198ec1dee4ea4e9a3c",
+    "tests/unit/test_sandbox.py": "ebaba88fa82e8def81c145c32eaf51361cb375a711387caaa9c1236a3cf3505a",
+    "scripts/validate_cli_loop.py": "09e2b6061c618313632cff6953f6cba7603a12707c6281532c949e34626723ba",
+    "scripts/validate_probe.py": "f3e0a73c35ec1e4b91c3490d481a8b21288d62b06b9765c6e84fbc4df3ad40e3",
+    "scripts/validate_sandbox.py": "45cdc520322cf8c7b0821e9ecc915f949f10fc037b325922a1f0416395ebd696",
+    "scripts/validate_self_correction.py": "251c1e845a5e55b29998ad5c3af0ee9a0343089c13b5df9d356cc88cb4d5743e",
+    "pyproject.toml": "5c3805aaa3f438c89325ee6cf222545c5a9a5e421c46df913d32b2708c6459ae"
+  },
+  "packaging_only_additions_not_part_of_prior_test_execution": {
+    "scripts/archive_validation.py": "8b20730177e92a0a506d894a6d5b84deb2d7bfec9b4ef6f9238b4d0500fabf26"
+  }
+}
