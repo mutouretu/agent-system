@@ -16,6 +16,10 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
+from rd_platform.agents import AlgorithmRunnerAgent, DataPipelineAgent
+from rd_platform.domain import Project, Task, TaskInput
+from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher
+
 MAX_BYTES = 1024 * 1024
 
 
@@ -47,6 +51,22 @@ class Records(BaseModel):
 class FilterRequest(Records):
     min_score: StrictInt = 0
     limit: Annotated[StrictInt, Field(ge=0, le=1000)] | None = None
+
+
+class TaskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str | None = Field(default=None, min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    capability: str = Field(min_length=1, max_length=128)
+    input: dict = Field(default_factory=dict)
+    depends_on: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(default_factory=list, max_length=100)
+
+
+class ProjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=256)
+    context: dict = Field(default_factory=dict)
+    tasks: list[TaskRequest] = Field(default_factory=list, max_length=100)
 
 
 class BodyLimit:
@@ -82,9 +102,15 @@ class BodyLimit:
         await self.app(scope, replay, send)
 
 
-def create_app(settings=None):
+def create_app(settings=None, *, registry: AgentRegistry | None = None):
     settings = settings or Settings.from_env()
     logger = logging.getLogger(f"rd-platform.api.{id(settings)}")
+    if registry is None:
+        registry = AgentRegistry()
+        registry.register(DataPipelineAgent())
+        registry.register(AlgorithmRunnerAgent())
+    dispatcher = Dispatcher(registry)
+    projects: dict[str, Project] = {}
 
     @asynccontextmanager
     async def lifespan(app):
@@ -111,6 +137,43 @@ def create_app(settings=None):
 
     app = FastAPI(title="R&D Platform Development API", version="0.2.0", lifespan=lifespan)
     app.add_middleware(BodyLimit)
+    app.state.agent_registry = registry
+    app.state.dispatcher = dispatcher
+    app.state.projects = projects
+
+    @app.get("/v1/agents")
+    async def list_agents():
+        return {"agents": [metadata.to_dict() for metadata in registry.list_agents()]}
+
+    @app.post("/v1/projects", status_code=201)
+    async def create_project(request: ProjectRequest):
+        # Bounded, single-process development store; no persistence claim.
+        if len(projects) >= 100:
+            raise HTTPException(409, "in-memory project capacity reached (100); restart to clear")
+        try:
+            project = Project(name=request.name, context=request.context)
+            for item in request.tasks:
+                options = {"id": item.id} if item.id is not None else {}
+                project.add_task(Task(name=item.name, capability=item.capability, input=TaskInput(item.input),
+                                      depends_on=item.depends_on, **options))
+            project.build_dag()
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        projects[project.id] = project
+        logger.info("created project=%s tasks=%s", project.id, len(project.tasks))
+        return project.to_dict()
+
+    @app.post("/v1/projects/{id}/dispatch")
+    async def dispatch_project(id: str):
+        project = projects.get(id)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        try:
+            await dispatcher.dispatch(project)
+        except DispatchConflict as exc:
+            raise HTTPException(409, str(exc)) from None
+        logger.info("dispatched project=%s states=%s", id, [task.status.value for task in project.tasks])
+        return project.to_dict()
 
     @app.get("/health")
     async def health():

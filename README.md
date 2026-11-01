@@ -170,3 +170,36 @@ PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_service.py
 ```
 
 该控制器通过 Docker SDK 在禁网、只读工作区的临时沙箱执行基础单元测试、服务测试和脚本语法检查，再在 API 容器中运行客户端验证独立探针和数据服务，检查宿主机发布端口。证据输出到 `sandbox-validation/service-*/`，含 JUnit、stdout/stderr、服务日志及 `summary.json`；临时测试容器自动销毁，Compose 服务由 `deploy.sh stop` 停止。
+
+## 项目管理与 Agent 调度框架
+
+`domain/` 提供无 Web/模型 SDK 依赖的 `Project`、`Task`、`TaskInput`、`TaskOutput` 和 `AgentMetadata`。`Project.add_task()` 支持先添加下游任务，`build_dag()` 校验重复 ID、缺失依赖和环，`get_executable_tasks()` 返回所有依赖已完成的 PENDING 任务。
+
+`AgentRegistry.register()` 注册可信 `BaseAgent` 实现，按 capability 匹配，同能力有多个 Agent 时选择最先注册的实现；支持 `unregister()` 动态移除。`Dispatcher.dispatch(project_or_task)` 是异步入口，项目按拓扑顺序串行执行，更新 `PENDING → RUNNING → COMPLETED / FAILED`。找不到 Agent 或上游失败时标记 `BLOCKED`，独立分支继续执行。已结束任务不会因重复 dispatch 而重跑；Python 调用方可先显式 `task.reset()` 再重试，依赖它的 BLOCKED 任务也需 reset。
+
+Agent 接收任务副本及独立上下文：项目 context 加上保留字段 `project_id` 和 `dependencies`（直接依赖任务 ID 到输出字典的映射）。返回值必须是有限、可 JSON 序列化的字典。调度器记录 Agent ID、输出和错误；同一项目重复并发调度会被拒绝，取消请求不会残留 RUNNING 状态。默认每个任务的协作式异步超时为 30 秒，可用 `Dispatcher(registry, task_timeout=...)` 调整；它不能强杀阻塞的同步代码，执行不可信代码仍必须使用 DockerSandbox 的硬超时及隔离能力。
+
+默认注册两个无模型调用的 Agent：
+
+| Agent | Capability | 固定行为 |
+| --- | --- | --- |
+| DataPipelineAgent | `data_processing` | 数值列表排序、去重，返回 `values` 和 `count` |
+| AlgorithmRunnerAgent | `algorithm_execution` | 返回 count、sum、min、max、mean，空列表的 min/max/mean 为 null |
+
+输入使用 `{"values": [3, 1, 3, 2]}`，最多 10,000 个有限数值，不接受布尔值。没有显式 values 时读取唯一上游的 values；多个上游时使用 `{"source_task": "上游任务ID"}` 选择来源。
+
+新增 HTTP 接口：
+
+- `GET /v1/agents`：返回已注册 Agent 元数据。
+- `POST /v1/projects`：接收 `name`、可选 `context`、`tasks`，返回 201 和项目 ID。每个任务含 `name`、`capability`、可选 `id`、`input`、`depends_on`；引用依赖时应显式指定任务 ID。
+- `POST /v1/projects/{id}/dispatch`：等待本次调度完成并返回全部任务状态与输出。任务失败通过任务的 FAILED/BLOCKED 和 error 字段表达；项目不存在返回 404，并发调度返回 409，非法项目 DAG 返回 422。
+
+```sh
+./scripts/deploy.sh start
+.venv-control/bin/python examples/project_demo.py
+PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_service.py
+```
+
+示例创建“排序去重 → 统计”任务图，成功输出 `PASS`，下游 mean 为 2。验证控制器在容器中执行所有单元与服务测试，并分别调用原服务示例和项目示例，保存 `project-client.json` 作为真实 HTTP 调度证据。
+
+当前项目存储是进程内字典：每个应用最多 100 个项目、每个项目最多 100 个任务，服务重启后丢失；须保持 Compose 中的单 worker 配置。该实现适用于本地开发，不提供 PostgreSQL 持久化队列、分布式租约或跨进程调度。自定义 Agent 通过 Python 注册（或注入 `create_app(..., registry=...)`），HTTP 请求不能注册代码或修改调度状态。

@@ -103,3 +103,58 @@ def test_probe_failure_is_unhealthy(monkeypatch):
     monkeypatch.setattr(probe_api, "snapshot", lambda: {"status": "error", "result": None})
     with TestClient(probe_api.app) as client:
         assert client.get("/health").status_code == 503
+
+
+def test_project_api_dispatches_real_builtin_agents(service):
+    client, _ = service
+    agents = client.get("/v1/agents").json()["agents"]
+    assert {cap for agent in agents for cap in agent["capabilities"]} == {"data_processing", "algorithm_execution"}
+    response = client.post("/v1/projects", json={"name": "demo", "context": {"source": "test"}, "tasks": [
+        {"id": "stats", "name": "statistics", "capability": "algorithm_execution", "depends_on": ["data"]},
+        {"id": "data", "name": "prepare", "capability": "data_processing", "input": {"values": [3, 1, 3, 2]}},
+    ]})
+    assert response.status_code == 201
+    project = response.json()
+    assert all(task["status"] == "PENDING" for task in project["tasks"])
+    url = f"/v1/projects/{project['id']}/dispatch"
+    response = client.post(url)
+    assert response.status_code == 200
+    result = response.json()
+    assert all(task["status"] == "COMPLETED" for task in result["tasks"])
+    assert result["tasks"][0]["output"]["mean"] == 2
+    assert client.post(url).json() == result
+
+
+@pytest.mark.parametrize("tasks", [
+    [{"id": "a", "name": "a", "capability": "x", "depends_on": ["missing"]}],
+    [{"id": "a", "name": "a", "capability": "x", "depends_on": ["a"]}],
+    [{"id": "a", "name": "a", "capability": "x"}, {"id": "a", "name": "b", "capability": "x"}],
+])
+def test_project_api_rejects_invalid_graph_atomically(service, tasks):
+    client, _ = service
+    assert client.post("/v1/projects", json={"name": "bad", "tasks": tasks}).status_code == 422
+    assert client.app.state.projects == {}
+
+
+def test_project_api_missing_capability_and_conflict(service):
+    from rd_platform.domain import TaskStatus
+
+    client, _ = service
+    assert client.post("/v1/projects/missing/dispatch").status_code == 404
+    project = client.post("/v1/projects", json={"name": "blocked", "tasks": [
+        {"id": "a", "name": "a", "capability": "unregistered"},
+    ]}).json()
+    url = f"/v1/projects/{project['id']}/dispatch"
+    result = client.post(url).json()
+    assert result["tasks"][0]["status"] == "BLOCKED"
+    assert "unregistered" in result["tasks"][0]["error"]
+    client.app.state.projects[project["id"]].tasks[0].status = TaskStatus.RUNNING
+    assert client.post(url).status_code == 409
+
+
+def test_project_api_cannot_inject_execution_state(service):
+    client, _ = service
+    response = client.post("/v1/projects", json={"name": "bad", "tasks": [
+        {"name": "a", "capability": "data_processing", "status": "COMPLETED", "output": {}},
+    ]})
+    assert response.status_code == 422

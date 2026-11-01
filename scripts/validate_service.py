@@ -79,14 +79,16 @@ def main():
             summary["services"][name] = {"id": container.id, "health": state["Health"]["Status"],
                                           "read_only_root": host["ReadonlyRootfs"], "image_id": container.attrs["Image"]}
             (run / f"{name}.log").write_bytes(container.logs(tail=100))
-        code, streams = services["api"].exec_run([
-            "python", "/app/examples/client_demo.py", "--probe-url", "http://probe:8001",
-        ], demux=True)
-        stdout, stderr = (stream.decode("utf-8", errors="replace") if stream else "" for stream in streams)
-        save("client.json", {"exit_code": code, "stdout": stdout, "stderr": stderr})
-        if code:
-            raise RuntimeError(f"Client demo failed: {stderr}")
-        summary["client"] = json.loads(stdout)
+        for label, command in (
+            ("client", ["python", "/app/examples/client_demo.py", "--probe-url", "http://probe:8001"]),
+            ("project-client", ["python", "/app/examples/project_demo.py"]),
+        ):
+            code, streams = services["api"].exec_run(command, demux=True)
+            stdout, stderr = (stream.decode("utf-8", errors="replace") if stream else "" for stream in streams)
+            save(f"{label}.json", {"exit_code": code, "stdout": stdout, "stderr": stderr})
+            if code:
+                raise RuntimeError(f"{label} demo failed: {stderr}")
+            summary[label] = json.loads(stdout)
         # The host controller only receives structured health evidence.
         opener = build_opener(ProxyHandler({}))
         summary["published_health"] = {}
