@@ -7,7 +7,7 @@ name = "rd-platform"
 version = "0.2.0"
 description = "Isolated execution runtime for the asset-management R&D platform"
 requires-python = ">=3.11"
-dependencies = ["docker==7.1.0"]
+dependencies = ["docker==7.1.0", "pydantic==2.14.2"]
 
 [project.optional-dependencies]
 test = ["pytest==8.3.5"]

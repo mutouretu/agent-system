@@ -4,9 +4,9 @@ This is an in-memory coordinator, not a durable queue or a security sandbox.
 """
 
 import asyncio
-from copy import deepcopy
 import math
 
+from rd_platform.agents.base import AgentInput, AgentOutput
 from rd_platform.domain import Project, Task, TaskOutput, TaskStatus
 from rd_platform.domain.task import json_object
 from .agent_registry import AgentNotFound, AgentRegistry
@@ -68,13 +68,21 @@ class Dispatcher:
         task.status = TaskStatus.RUNNING
         task.error = None
         task.output = None
+        task.logs = None
         task.agent_id = agent.metadata.id
         try:
-            # A detached Task prevents plugins from changing scheduler-owned state.
+            request = AgentInput.from_task(task, execution_context)
             async with asyncio.timeout(self.task_timeout):
-                result = await agent.run(deepcopy(task), execution_context)
-            task.output = TaskOutput(result)
-            task.status = TaskStatus.COMPLETED
+                result = await agent.run(request)
+            if not isinstance(result, AgentOutput):
+                raise ValueError("agent run must return AgentOutput")
+            # Revalidate even model_construct() or mutated nested artifact data.
+            result = AgentOutput.model_validate(result.model_dump())
+            task.output = TaskOutput(result.artifacts)
+            task.status = TaskStatus(result.status.value)
+            task.logs = result.logs
+            if task.status != TaskStatus.COMPLETED:
+                task.error = (result.error or result.logs or f"agent returned {task.status.value}")[:4096]
         except asyncio.CancelledError:
             task.status = TaskStatus.FAILED
             task.error = "CancelledError: dispatch cancelled"

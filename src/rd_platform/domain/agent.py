@@ -1,8 +1,16 @@
 """Declarative metadata for trusted, registered agent implementations."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .task import json_object
+
+
+class AgentRole(str, Enum):
+    ARCHITECT = "ARCHITECT"
+    CODER = "CODER"
+    REVIEWER = "REVIEWER"
+    TESTER = "TESTER"
 
 
 @dataclass(frozen=True)
@@ -12,6 +20,7 @@ class AgentMetadata:
     capabilities: frozenset[str]
     tools: tuple[str, ...] = ()
     config: dict = field(default_factory=dict)
+    role: AgentRole | None = None
 
     def __post_init__(self):
         if any(not isinstance(value, str) or not value.strip() for value in (self.id, self.name)):
@@ -26,7 +35,12 @@ class AgentMetadata:
         object.__setattr__(self, "capabilities", capabilities)
         object.__setattr__(self, "tools", tools)
         object.__setattr__(self, "config", json_object(self.config))
+        if self.role is not None:
+            object.__setattr__(self, "role", AgentRole(self.role))
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "capabilities": sorted(self.capabilities),
-                "tools": list(self.tools), "config": json_object(self.config)}
+        result = {"id": self.id, "name": self.name, "capabilities": sorted(self.capabilities),
+                  "tools": list(self.tools), "config": json_object(self.config)}
+        if self.role is not None:
+            result["role"] = self.role.value
+        return result

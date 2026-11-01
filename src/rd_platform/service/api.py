@@ -16,9 +16,8 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
-from rd_platform.agents import AlgorithmRunnerAgent, DataPipelineAgent
 from rd_platform.domain import Project, Task, TaskInput
-from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher
+from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher, create_default_registry
 
 MAX_BYTES = 1024 * 1024
 
@@ -106,9 +105,7 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
     settings = settings or Settings.from_env()
     logger = logging.getLogger(f"rd-platform.api.{id(settings)}")
     if registry is None:
-        registry = AgentRegistry()
-        registry.register(DataPipelineAgent())
-        registry.register(AlgorithmRunnerAgent())
+        registry = create_default_registry()
     dispatcher = Dispatcher(registry)
     projects: dict[str, Project] = {}
 

@@ -27,7 +27,7 @@ def main():
     def save(name, value):
         (run / name).write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
-    for name in ("src", "tests", "scripts"):
+    for name in ("src", "tests", "scripts", "examples"):
         shutil.copytree(ROOT / name, workspace / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copy2(ROOT / "pyproject.toml", workspace / "pyproject.toml")
     wheels = inputs / "wheels"

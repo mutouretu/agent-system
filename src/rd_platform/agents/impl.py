@@ -2,14 +2,15 @@
 
 import math
 
-from rd_platform.domain import AgentMetadata, Task
-from .base import BaseAgent
+from rd_platform.domain import AgentMetadata
+from rd_platform.manager.agent_registry import register_agent
+from .base import AgentInput, AgentOutput, BaseAgent
 
 
-def _values(task: Task, context: dict) -> list[int | float]:
-    data = task.input.data
+def _values(request: AgentInput) -> list[int | float]:
+    data = request.payload
     if "values" not in data:
-        dependencies = context.get("dependencies", {})
+        dependencies = request.context.get("dependencies", {})
         source = data.get("source_task")
         if source is None and len(dependencies) == 1:
             source = next(iter(dependencies))
@@ -24,21 +25,23 @@ def _values(task: Task, context: dict) -> list[int | float]:
     return list(values)
 
 
+@register_agent("data-pipeline")
 class DataPipelineAgent(BaseAgent):
     def __init__(self):
         super().__init__(AgentMetadata("data-pipeline", "Data Pipeline", frozenset({"data_processing"})))
 
-    async def run(self, task: Task, context: dict) -> dict:
-        values = sorted(set(_values(task, context)))
-        return {"values": values, "count": len(values)}
+    async def run(self, request: AgentInput) -> AgentOutput:
+        values = sorted(set(_values(request)))
+        return AgentOutput(artifacts={"values": values, "count": len(values)})
 
 
+@register_agent("algorithm-runner")
 class AlgorithmRunnerAgent(BaseAgent):
     def __init__(self):
         super().__init__(AgentMetadata("algorithm-runner", "Algorithm Runner", frozenset({"algorithm_execution"})))
 
-    async def run(self, task: Task, context: dict) -> dict:
-        values = _values(task, context)
+    async def run(self, request: AgentInput) -> AgentOutput:
+        values = _values(request)
         total = sum(values)
-        return {"count": len(values), "sum": total, "min": min(values) if values else None,
-                "max": max(values) if values else None, "mean": total / len(values) if values else None}
+        return AgentOutput(artifacts={"count": len(values), "sum": total, "min": min(values) if values else None,
+                                      "max": max(values) if values else None, "mean": total / len(values) if values else None})

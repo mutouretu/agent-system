@@ -1,0 +1,25 @@
+Implement an ordinary in-memory LRU cache in Python 3.12 using only the standard library.
+This is a library, not a web service. No concurrency or rate-limiting is required.
+
+Required public API in src/lru_cache.py:
+  class LRUCache:
+    __init__(self, capacity: int)
+    get(self, key, default=None)
+    put(self, key, value) -> None
+    __len__(self) -> int
+    keys(self) -> list  # least-recently-used to most-recently-used
+
+capacity must be a positive built-in int: reject bool and non-int values with TypeError,
+and zero/negative integers with ValueError. Keys are any hashable objects.
+get hits and put operations update recency; get misses return the supplied default and
+must not change recency. Updating an existing key must not evict another key or grow size.
+Insertion at capacity evicts exactly the least recently used key. Preserve None/False/0
+and other values exactly. Cache instances are independent. get and put must be O(1).
+Do not catch TypeError for unhashable keys; ordinary dictionary semantics are sufficient.
+
+Return full implementation files under src/ and at least one pytest file under tests/.
+All files must be .py; no package installation, generated configuration, network, shell,
+conftest.py, pytest hooks, test skipping, or modification of the test runner is allowed.
+Tests must import `from lru_cache import LRUCache` (src/ is added to sys.path by the runner).
+Include useful edge-case assertions, not placeholder tests. Independent fixed acceptance
+tests will run in a separate isolated container against the same implementation.

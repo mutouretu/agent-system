@@ -46,7 +46,7 @@ def main():
     # Only this newly created, empty artifact directory is made writable by the
     # fixed container UID. No system directories or existing permissions change.
     output.chmod(0o777)
-    for name in ("src", "tests", "scripts"):
+    for name in ("src", "tests", "scripts", "examples"):
         shutil.copytree(ROOT / name, workspace / name, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(ROOT / "pyproject.toml", workspace / "pyproject.toml")
     shutil.copytree(STATE / "wheels", inputs / "wheels")
@@ -58,10 +58,30 @@ def main():
     try:
         client.ping()
         try:
-            client.images.get(image)
+            base_image = client.images.get(image)
         except ImageNotFound:
             print(f"Provisioning public Linux image via Docker SDK: {image}", flush=True)
-            client.images.pull(image)
+            base_image = client.images.pull(image)
+
+        # /tmp is intentionally noexec. Native framework dependencies must live
+        # in an immutable image layer, not the writable test dependency target.
+        build_dir = run_dir / "image"
+        build_dir.mkdir()
+        shutil.copytree(inputs / "wheels", build_dir / "wheels")
+        (build_dir / "Dockerfile").write_text(
+            f"FROM {base_image.id}\n"
+            "USER 0:0\n"
+            "COPY wheels/ /opt/validation-wheels/\n"
+            "RUN python -m pip install --no-index --no-cache-dir --no-compile "
+            "--find-links=/opt/validation-wheels pydantic==2.14.2 "
+            "&& rm -rf /opt/validation-wheels\n"
+        )
+        print("Preparing native framework dependencies in a network-disabled Docker image", flush=True)
+        prepared, _ = client.images.build(path=str(build_dir), network_mode="none", rm=True, forcerm=True,
+                                          tag="rd-platform-validation:0.2.0")
+        image = prepared.id
+        (run_dir / "image.json").write_text(json.dumps({"base_image_id": base_image.id, "image_id": image,
+                                                       "build_network": "none"}, indent=2))
 
         def create_box(**options):
             box = DockerSandbox(image, workspace, inputs, output, client=client, **options)

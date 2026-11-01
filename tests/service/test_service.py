@@ -108,7 +108,7 @@ def test_probe_failure_is_unhealthy(monkeypatch):
 def test_project_api_dispatches_real_builtin_agents(service):
     client, _ = service
     agents = client.get("/v1/agents").json()["agents"]
-    assert {cap for agent in agents for cap in agent["capabilities"]} == {"data_processing", "algorithm_execution"}
+    assert {"data_processing", "algorithm_execution"} <= {cap for agent in agents for cap in agent["capabilities"]}
     response = client.post("/v1/projects", json={"name": "demo", "context": {"source": "test"}, "tasks": [
         {"id": "stats", "name": "statistics", "capability": "algorithm_execution", "depends_on": ["data"]},
         {"id": "data", "name": "prepare", "capability": "data_processing", "input": {"values": [3, 1, 3, 2]}},
@@ -158,3 +158,74 @@ def test_project_api_cannot_inject_execution_state(service):
         {"name": "a", "capability": "data_processing", "status": "COMPLETED", "output": {}},
     ]})
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("status", ["COMPLETED", "FAILED", "BLOCKED"])
+def test_protocol_agent_dynamic_catalog_and_api(tmp_path, status):
+    from rd_platform.agents import AgentInput, AgentOutput, BaseAgent, CODER
+    from rd_platform.domain import AgentMetadata
+    from rd_platform.manager import AGENT_REGISTRY, register_agent
+
+    @register_agent("api-echo")
+    class EchoAgent(BaseAgent):
+        def __init__(self):
+            super().__init__(AgentMetadata("api-echo", "API Echo", {"echo"}, role=CODER))
+
+        async def run(self, request: AgentInput) -> AgentOutput:
+            return AgentOutput(status=status, artifacts={"received": request.payload}, logs="echo evidence",
+                               error=None if status == "COMPLETED" else "review required")
+
+    try:
+        settings = Settings(*(tmp_path / name for name in ("data", "logs", "models")))
+        for path in (settings.data, settings.logs, settings.models):
+            path.mkdir()
+        with TestClient(create_app(settings)) as client:
+            agents = client.get("/v1/agents").json()["agents"]
+            assert next(agent for agent in agents if agent["id"] == "api-echo")["role"] == "CODER"
+            payload = {"requirements": ["build a service"], "files": {"app.py": "# candidate"}}
+            created = client.post("/v1/projects", json={"name": "generic", "tasks": [
+                {"name": "echo", "capability": "echo", "input": payload},
+            ]})
+            assert created.status_code == 201
+            response = client.post(f"/v1/projects/{created.json()['id']}/dispatch")
+            assert response.status_code == 200
+            task = response.json()["tasks"][0]
+            assert task["status"] == status
+            assert task["output"] == {"received": payload}
+            assert task["logs"] == "echo evidence"
+            assert task["error"] == (None if status == "COMPLETED" else "review required")
+    finally:
+        AGENT_REGISTRY.pop("api-echo")
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_architect_skeleton_via_api(tmp_path, configured):
+    from rd_platform.agents.dev import ArchitectAgent
+    from rd_platform.manager import AgentRegistry
+
+    class FakeGenerator:
+        async def generate(self, request):
+            return {"architecture_spec": {"modules": [{"name": "app", "responsibility": "handle requests"}],
+                                          "data_flow": ["request -> response"]},
+                    "api_contracts": {"request": {"type": "object"}},
+                    "subtasks": [{"id": "build", "description": "implement app", "acceptance_criteria": ["returns response"]}]}
+
+    registry = AgentRegistry()
+    registry.register(ArchitectAgent(FakeGenerator() if configured else None))
+    settings = Settings(*(tmp_path / name for name in ("data", "logs", "models")))
+    for directory in (settings.data, settings.logs, settings.models):
+        directory.mkdir()
+    with TestClient(create_app(settings, registry=registry)) as client:
+        assert client.get("/v1/agents").json()["agents"][0]["role"] == "ARCHITECT"
+        created = client.post("/v1/projects", json={"name": "design", "tasks": [
+            {"name": "design", "capability": "architecture", "input": {"requirements": "build a service"}},
+        ]})
+        assert created.status_code == 201
+        result = client.post(f"/v1/projects/{created.json()['id']}/dispatch")
+        assert result.status_code == 200
+        task = result.json()["tasks"][0]
+        assert task["status"] == ("COMPLETED" if configured else "BLOCKED")
+        if configured:
+            assert task["output"]["subtasks"][0]["id"] == "build"
+        else:
+            assert task["output"] == {} and "not configured" in task["error"]

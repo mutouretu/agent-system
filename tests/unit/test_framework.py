@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from rd_platform.agents import AlgorithmRunnerAgent, BaseAgent, DataPipelineAgent
+from rd_platform.agents import AlgorithmRunnerAgent, BaseAgent, DataPipelineAgent, LegacyAgentAdapter
 from rd_platform.domain import AgentMetadata, Project, Task, TaskInput, TaskOutput, TaskStatus
 from rd_platform.manager import AgentNotFound, AgentRegistry, DispatchConflict, Dispatcher
 
@@ -121,7 +121,7 @@ class InspectAgent(BaseAgent):
 def test_dependency_outputs_and_context_are_detached():
     agents = AgentRegistry()
     agent = InspectAgent()
-    agents.register(agent)
+    agents.register(LegacyAgentAdapter(agent))
     first = Task("first", "inspect", id="first")
     second = Task("second", "inspect", id="second", depends_on=["first"])
     project = Project("context", context={"nested": {"changed": False}}, tasks=[second, first])
@@ -155,7 +155,7 @@ def test_invalid_agent_output_fails(result):
             return result
 
     agents = AgentRegistry()
-    agents.register(BadAgent(AgentMetadata("bad", "bad", {"bad"})))
+    agents.register(LegacyAgentAdapter(BadAgent(AgentMetadata("bad", "bad", {"bad"}))))
     task = Task("bad", "bad")
     asyncio.run(Dispatcher(agents).dispatch(task))
     assert task.status == TaskStatus.FAILED and task.output is None
@@ -172,7 +172,7 @@ def test_concurrent_dispatch_and_cancellation_release_project():
                 await asyncio.Event().wait()
 
         agents = AgentRegistry()
-        agents.register(SlowAgent(AgentMetadata("slow", "slow", {"slow"})))
+        agents.register(LegacyAgentAdapter(SlowAgent(AgentMetadata("slow", "slow", {"slow"}))))
         task = Task("slow", "slow")
         project = Project("slow", tasks=[task])
         dispatcher = Dispatcher(agents)
@@ -200,7 +200,7 @@ def test_task_timeout():
             await asyncio.Event().wait()
 
     agents = AgentRegistry()
-    agents.register(SlowAgent(AgentMetadata("slow", "slow", {"slow"})))
+    agents.register(LegacyAgentAdapter(SlowAgent(AgentMetadata("slow", "slow", {"slow"}))))
     task = Task("slow", "slow")
     asyncio.run(Dispatcher(agents, task_timeout=0.01).dispatch(task))
     assert task.status == TaskStatus.FAILED

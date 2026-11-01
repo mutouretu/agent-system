@@ -51,6 +51,7 @@ class Task:
     output: TaskOutput | None = None
     error: str | None = None
     agent_id: str | None = None
+    logs: str | None = None
 
     def __post_init__(self):
         if any(not isinstance(value, str) or not value.strip() for value in (self.id, self.name, self.capability)):
@@ -72,6 +73,7 @@ class Task:
         self.output = None
         self.error = None
         self.agent_id = None
+        self.logs = None
 
     def to_dict(self) -> dict:
         return {
@@ -79,5 +81,5 @@ class Task:
             "input": json_object(self.input.data), "depends_on": list(self.depends_on),
             "status": self.status.value,
             "output": json_object(self.output.data) if self.output is not None else None,
-            "error": self.error, "agent_id": self.agent_id,
+            "error": self.error, "agent_id": self.agent_id, "logs": self.logs,
         }
