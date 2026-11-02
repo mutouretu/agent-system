@@ -196,7 +196,6 @@ def test_rejected_review_is_completed_and_bound_to_exact_code():
     {"review_status": "REJECTED"},
     {**rejected(), "review_status": "APPROVED"},
     {"review_status": "APPROVED", "correction_directives": [{"instruction": "fix"}]},
-    {**rejected(), "issues": [{**rejected()["issues"][0], "file": "unknown.py"}]},
     {**rejected(), "issues": [{**rejected()["issues"][0], "line": 200}]},
 ])
 def test_invalid_review_decisions_and_locations_fail(decision):
@@ -220,24 +219,17 @@ def test_reviewer_repairs_one_structural_json_error_without_weakening_contract()
     assert backend.calls[1].input_data['format_feedback'][0]['path'].endswith('suggestion')
 
 
-def test_reviewer_repairs_unknown_file_reference_before_dispatch():
-    class RepairGenerator:
-        def __init__(self):
-            self.calls = []
-
-        async def generate(self, request):
-            self.calls.append(request)
-            if len(self.calls) == 1:
-                broken = rejected()
-                broken['issues'][0]['file'] = 'src/missing.py'
-                return broken
-            return rejected()
-
-    generator = RepairGenerator()
+def test_reviewer_preserves_missing_file_finding_without_claiming_location():
+    finding = rejected()
+    finding['issues'][0]['file'] = 'src/missing.py'
+    finding['issues'][0]['line'] = 3
+    generator = FakeGenerator(finding)
     result = run(dev.ReviewerAgent(generator), {'architecture': architecture(), 'code': code()})
     assert result.status == AgentStatus.COMPLETED
-    assert len(generator.calls) == 2
-    assert generator.calls[1].input_data['format_feedback'][0]['type'] == 'semantic_error'
+    assert len(generator.calls) == 1
+    assert result.artifacts['issues'][0]['file'] is None
+    assert result.artifacts['issues'][0]['line'] is None
+    assert result.artifacts['issues'][0]['message'] == finding['issues'][0]['message']
 
 
 def test_reviewer_format_repair_is_bounded_and_never_forges_approval():

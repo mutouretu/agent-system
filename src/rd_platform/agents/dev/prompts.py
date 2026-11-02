@@ -35,7 +35,8 @@ PROMPTS = {
     "Example rejected shape: {\"review_status\":\"REJECTED\",\"issues\":[{\"file\":null,\"line\":null,\"severity\":\"ERROR\",\"message\":\"Boundary not handled\",\"suggestion\":\"Handle empty input\"}],\"correction_directives\":[{\"file\":null,\"instruction\":\"Handle empty input and add a test\"}]}. "
     "If no blocking defect is demonstrable, return {\"review_status\":\"APPROVED\",\"issues\":[],\"correction_directives\":[]}. "
     "REJECTED requires issues and directives; APPROVED cannot contain blocking issues. "
-    "Reference only files supplied in code; never invent execution or test evidence. "
+    "For issues about a file absent from the supplied code artifact, set file and line to null and name the missing file in message/suggestion. "
+    "Never invent execution or test evidence. "
     "If test_evidence is supplied, analyze its actual failures and produce correction directives; "
     "do not approve code that still violates the fixed acceptance criteria.",
 }

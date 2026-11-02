@@ -27,7 +27,11 @@ class ReviewerAgent(GeneratingAgent):
             def validate_references(decision):
                 for item in (*decision.issues, *decision.correction_directives):
                     if item.file is not None and item.file not in files:
-                        raise ValueError("review references a file not present in the code artifact")
+                        # A missing repository file may itself be the review finding.
+                        # Keep the issue/directive, but do not assert an unverified location.
+                        if hasattr(item, 'line'):
+                            item.line = None
+                        item.file = None
                 for issue in decision.issues:
                     if issue.line is not None and issue.line > max(1, len(files[issue.file].splitlines())):
                         raise ValueError("review line number exceeds file length")
