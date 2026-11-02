@@ -37,6 +37,7 @@ class ChatRequest(StrictModel):
 class ResumeRequest(StrictModel):
     task_id: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
     new_cycle: bool = False
+    operator_guidance: str | None = Field(default=None, min_length=1, max_length=4000, pattern=r"\S")
 
 
 class WorkerRequest(StrictModel):
@@ -96,7 +97,8 @@ def install_workbench(app):
 
     @app.post("/v1/runs/{run_id}/resume", status_code=202)
     def resume_run(run_id: str, payload: ResumeRequest, request: Request):
-        return translate(store(request).resume_run, run_id, payload.task_id, new_cycle=payload.new_cycle)
+        return translate(store(request).resume_run, run_id, payload.task_id,
+                         new_cycle=payload.new_cycle, operator_guidance=payload.operator_guidance)
 
     @app.get("/v1/runs/{run_id}/chat")
     def chat_history(run_id: str, request: Request):

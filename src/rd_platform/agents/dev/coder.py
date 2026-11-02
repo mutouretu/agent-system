@@ -11,6 +11,7 @@ class CoderInput(Contract):
     previous_code: CoderArtifacts | None = None
     review: ReviewerArtifacts | None = None
     test_evidence: TesterArtifacts | None = None
+    operator_guidance: Text | None = None
 
 
 @register_agent("coder")
@@ -20,9 +21,10 @@ class CoderAgent(GeneratingAgent):
 
     async def run(self, request: AgentInput) -> AgentOutput:
         try:
-            payload = input_payload(request, {"architecture", "instructions", "previous_code", "review", "test_evidence"})
+            payload = input_payload(request, {"architecture", "instructions", "previous_code", "review", "test_evidence", "operator_guidance"})
             values = {"architecture": resolve(request, payload, "architecture", ArchitectArtifacts),
-                      "instructions": payload.get("instructions")}
+                      "instructions": payload.get("instructions"),
+                      "operator_guidance": payload.get("operator_guidance")}
             for key, schema in (("previous_code", CoderArtifacts), ("review", ReviewerArtifacts)):
                 if key in payload or key in payload.get("artifact_sources", {}):
                     values[key] = resolve(request, payload, key, schema)
@@ -43,6 +45,13 @@ class CoderAgent(GeneratingAgent):
             if self.generator is None:
                 return self.unavailable()
             result = await self.generate(inputs.model_dump(), CoderArtifacts, repair_format=True)
+            if inputs.previous_code is not None:
+                # A repair response is a set of complete file replacements.
+                # Omitted paths retain their previous tested candidate content.
+                result = CoderArtifacts(
+                    files={**inputs.previous_code.files, **result.files},
+                    tests={**inputs.previous_code.tests, **result.tests},
+                    commit_message=result.commit_message)
             return AgentOutput(artifacts=result.model_dump())
         except Exception as exc:
             return failed(exc)

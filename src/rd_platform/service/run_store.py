@@ -164,8 +164,12 @@ class RunStore:
             self.event(db, record["id"], "run_queued", {"status": "QUEUED", "backend": backend})
         return self.get_run(record["id"])
 
-    def resume_run(self, parent_id, task_id=None, *, new_cycle=False):
+    def resume_run(self, parent_id, task_id=None, *, new_cycle=False, operator_guidance=None):
         """Queue a child run at a selected role checkpoint, replaying earlier evidence."""
+        if operator_guidance is not None:
+            if not isinstance(operator_guidance, str) or not operator_guidance.strip() or len(operator_guidance) > 4000:
+                raise StoreConflict('操作者指导必须是 1-4000 字符的非空文本')
+            operator_guidance = operator_guidance.strip()
         now = time.time()
         with self.transaction() as db:
             parent = db.execute(select(runs).where(runs.c.id == parent_id).with_for_update()).mappings().first()
@@ -177,11 +181,10 @@ class RunStore:
             if not tasks:
                 raise StoreConflict('此运行没有可恢复的角色检查点')
             if new_cycle:
-                if task_id is not None:
-                    raise StoreConflict('新修复轮次会自动从最近的有效产物开始')
                 architect = next((task for task in tasks if task['id'] == 'architect' and task['status'] == 'COMPLETED'), None)
                 coder = next((task for task in reversed(tasks)
-                              if task['capability'] == 'coding' and task['status'] == 'COMPLETED'), None)
+                              if (task_id is None or task['id'] == task_id) and
+                              task['capability'] == 'coding' and task['status'] == 'COMPLETED'), None)
                 if architect is None or coder is None:
                     raise StoreConflict('缺少可复用的架构或代码产物')
                 suffix = coder['id'].removeprefix('coder-')
@@ -237,6 +240,8 @@ class RunStore:
             if new_cycle:
                 summary['new_cycle'] = True
                 summary['source_coder_task'] = coder['id']
+            if operator_guidance:
+                summary['operator_guidance'] = operator_guidance
             summary['workspace_mode'] = parent['summary'].get('workspace_mode', 'isolated')
             if snapshot:
                 summary['agent_config'] = snapshot

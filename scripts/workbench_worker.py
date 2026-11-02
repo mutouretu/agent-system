@@ -49,6 +49,7 @@ Production files must be under src/rd_platform/ (.py, .js, .html, .css); add new
 under tests/unit/ or tests/service/. Existing tests and the sandbox runtime are protected.
 Return complete contents for each changed file. Preserve current API and UI behavior.
 Prefer small new modules or pages over rewriting a large existing file.
+Never overwrite an existing file when its supplied source is truncated or absent.
 The candidate will run existing repository tests inside Docker before Git promotion.
 """
 
@@ -74,15 +75,26 @@ def repository_context(root, requirements, max_bytes=48000):
         if name.endswith(('service/api.py', 'service/static/index.html')):
             score += 15
         ranked.append((score, name, body))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
+    ui_task = any(term in requirements.lower() for term in (
+        '页面', '侧边栏', '前端', '界面', 'dashboard', 'frontend', 'front-end', 'index.html'))
+    priority = (
+        'src/rd_platform/service/static/index.html',
+        'src/rd_platform/service/api.py',
+        'src/rd_platform/service/static/agent_config.js',
+        'src/rd_platform/service/static/app.css',
+    ) if ui_task else ()
+    priority_rank = {name: index for index, name in enumerate(priority)}
+    ranked.sort(key=lambda item: (priority_rank.get(item[1], len(priority)), -item[0], item[1]))
     result = 'Repository file inventory:\n' + '\n'.join(inventory)[:8000] + '\nRelevant existing files:\n'
     for score, name, body in ranked:
-        if score <= 0 or len(result) >= max_bytes:
+        if (score <= 0 and name not in priority_rank) or len(result) >= max_bytes:
             break
-        excerpt = body[:min(len(body), 16000, max_bytes - len(result) - len(name) - 40)]
+        limit = 24000 if name in priority_rank and name != 'src/rd_platform/service/static/app.css' else 4000 if name in priority_rank else 16000
+        excerpt = body[:max(0, min(len(body), limit, max_bytes - len(result) - len(name) - 70))]
         if not excerpt:
             break
-        result += f'\n--- {name} ---\n{excerpt}\n'
+        suffix = '\n[TRUNCATED: reference only; do not overwrite this file]' if len(excerpt) < len(body) else ''
+        result += f'\n--- {name} ---\n{excerpt}{suffix}\n'
     return result[:max_bytes]
 
 
@@ -235,7 +247,8 @@ class Worker:
             seed = job.get('summary', {}).get('resume_seed') if job['template'] == 'resume' else None
             if job['template'] == 'resume' and not isinstance(seed, dict):
                 raise ValueError('resume run has no checkpoint artifacts')
-            summary = asyncio.run(workflow.run(requirements, resume_seed=seed))
+            summary = asyncio.run(workflow.run(requirements, resume_seed=seed,
+                                               operator_guidance=job.get('summary', {}).get('operator_guidance')))
             if repository_mode and summary.get('status') == 'PASS':
                 try:
                     candidate = CoderArtifacts.model_validate(summary['final_artifacts'])

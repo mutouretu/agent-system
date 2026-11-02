@@ -137,6 +137,15 @@ def test_rejected_review_and_failed_diagnostic_test_both_reach_coder(tmp_path):
     assert "simulated assertion failure" in coder_calls[1].input_data["test_evidence"]["evidence_logs"]["logs"]
 
 
+def test_operator_guidance_reaches_repair_coder(tmp_path):
+    generator = FakeGenerator(reject_first=True)
+    result = asyncio.run(SoftwareTeamWorkflow(generator, FakeExecutor(fail_first=True), tmp_path)
+                         .run('cache', operator_guidance='Register the route in create_app.'))
+    assert result['status'] == 'PASS'
+    coder_calls = [call for call in generator.calls if call.role.value == 'CODER']
+    assert all(call.input_data['operator_guidance'] == 'Register the route in create_app.' for call in coder_calls)
+
+
 def test_revision_limit_cannot_be_bypassed(tmp_path):
     executor = FakeExecutor()
     result = asyncio.run(SoftwareTeamWorkflow(FakeGenerator(reject_always=True), executor, tmp_path, max_retries=2).run("cache"))
