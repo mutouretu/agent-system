@@ -15,6 +15,7 @@ from docker.errors import NotFound
 
 from rd_platform.agents.dev.schemas import CoderArtifacts, SandboxTestResult, TestCounts, code_digest, safe_path
 from .sandbox import DockerSandbox
+from .workspace_contract import validate_repository_candidate
 
 
 RUNNER = '''import os, sys
@@ -28,6 +29,11 @@ raise SystemExit(pytest.main([
     "--junitxml=/output/pytest.xml", "/workspace/tests",
 ]))
 '''
+
+REPOSITORY_RUNNER = RUNNER.replace('sys.path.append("/workspace/src")',
+    'sys.path.insert(0, "/workspace/src")\nsys.path.insert(0, "/workspace")').replace(
+    '"/workspace/tests",',
+    '"/workspace/tests/unit", "/workspace/tests/service", "/workspace/tests/test_lianliankan.py",')
 
 
 def parse_junit(raw: bytes) -> TestCounts:
@@ -68,7 +74,8 @@ class DockerTestExecutor:
     own hard timeout/output cap, including when the asyncio loop is occupied.
     """
 
-    def __init__(self, evidence_dir, wheels_dir, *, acceptance_tests=None, image="python:3.12-slim", timeout=30, client=None):
+    def __init__(self, evidence_dir, wheels_dir, *, acceptance_tests=None, image="python:3.12-slim", timeout=30,
+                 client=None, repository_root=None):
         self.evidence_dir = Path(evidence_dir)
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         self.wheels_dir = Path(wheels_dir).resolve(strict=True)
@@ -78,6 +85,7 @@ class DockerTestExecutor:
             if not isinstance(content, str):
                 raise ValueError("acceptance test contents must be strings")
         self.image, self.timeout, self.client = image, timeout, client
+        self.repository_root = Path(repository_root).resolve(strict=True) if repository_root is not None else None
         self.runs = []
 
     @staticmethod
@@ -88,10 +96,13 @@ class DockerTestExecutor:
 
     async def run_tests(self, code: CoderArtifacts) -> SandboxTestResult:
         code = CoderArtifacts.model_validate(code.model_dump())
-        for path in code.files:
-            self._python_path(path, "src/")
-        for path in code.tests:
-            self._python_path(path, "tests/")
+        if self.repository_root is not None:
+            validate_repository_candidate(code, self.repository_root)
+        else:
+            for path in code.files:
+                self._python_path(path, "src/")
+            for path in code.tests:
+                self._python_path(path, "tests/")
         run_id = f"tests-{uuid.uuid4().hex}"
         run_dir = self.evidence_dir / run_id
         run_dir.mkdir()
@@ -104,8 +115,8 @@ class DockerTestExecutor:
             # Pin one image ID across both jobs and keep the image identity in evidence.
             image = client.images.get(self.image)
             record["image_id"] = image.id
-            jobs = [("unit", code.tests)]
-            if self.acceptance_tests:
+            jobs = [("repository", code.tests)] if self.repository_root is not None else [("unit", code.tests)]
+            if self.acceptance_tests and self.repository_root is None:
                 jobs.append(("acceptance", self.acceptance_tests))
             for name, tests in jobs:
                 job_dir = run_dir / name
@@ -113,18 +124,23 @@ class DockerTestExecutor:
                 for path in (workspace, inputs, output):
                     path.mkdir(parents=True)
                 output.chmod(0o777)
+                if self.repository_root is not None:
+                    for folder in ('src', 'tests', 'scripts', 'examples'):
+                        shutil.copytree(self.repository_root / folder, workspace / folder,
+                                        dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                    shutil.copy2(self.repository_root / 'pyproject.toml', workspace / 'pyproject.toml')
                 for path, content in {**code.files, **tests}.items():
                     target = workspace / path
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    with target.open("x", encoding="utf-8") as stream:
+                    with target.open("w" if self.repository_root is not None else "x", encoding="utf-8") as stream:
                         stream.write(content)
                 manifest = {path: hashlib.sha256(content.encode()).hexdigest() for path, content in {**code.files, **tests}.items()}
                 save(job_dir / "manifest.json", manifest)
                 shutil.copytree(self.wheels_dir, inputs / "wheels")
-                (inputs / "run_tests.py").write_text(RUNNER)
+                (inputs / "run_tests.py").write_text(REPOSITORY_RUNNER if self.repository_root is not None else RUNNER)
                 (inputs / "pytest.ini").write_text("[pytest]\naddopts =\n")
                 box = DockerSandbox(image.id, workspace, inputs, output, client=client,
-                                    timeout_seconds=self.timeout, max_output_bytes=24 * 1024)
+                                    timeout_seconds=self.timeout, max_output_bytes=64 * 1024 if self.repository_root else 24 * 1024)
                 job = {"name": name, "container_removed": False, "manifest": manifest}
                 record["jobs"].append(job)
                 print(f"Docker tests: {name} ({run_id})", flush=True)
@@ -137,7 +153,8 @@ class DockerTestExecutor:
                         )}
                         setup = box.exec_run(["python", "-I", "-m", "pip", "install", "--no-index", "--no-compile",
                                               "--disable-pip-version-check", "--find-links=/input/wheels",
-                                              "--target=/tmp/deps", "pytest==8.3.5"])
+                                              "--target=/tmp/deps", "pytest==8.3.5",
+                                              *(["docker==7.1.0"] if self.repository_root is not None else [])])
                         save(job_dir / "setup.json", dict(zip(("exit_code", "stdout", "stderr"), setup)))
                         if setup[0]:
                             raise RuntimeError("offline pytest installation failed; inspect setup.json")

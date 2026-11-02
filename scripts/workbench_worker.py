@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import sys
 import threading
@@ -29,6 +30,8 @@ from rd_platform.manager.role_router import RoleRouter
 from rd_platform.agent_management import validate_agent_config
 from rd_platform.domain.agent import AgentRole
 from rd_platform.runtime.test_executor import DockerTestExecutor
+from rd_platform.runtime.workspace_promoter import WorkspacePromoter
+from rd_platform.agents.dev.schemas import CoderArtifacts
 from rd_platform.agents.base import AgentInput, AgentStatus
 from rd_platform.agents.dev.requirements import RequirementArchitectAgent
 from rd_platform.agents.dev.interfaces import GenerationRequest
@@ -39,6 +42,48 @@ Put all business .py files under src/ and pytest .py files under tests/.
 Tests import source modules directly (src is on the Python path). No conftest, plugins,
 skipped tests, shell commands or dependency installation. Provide complete file contents.
 """
+
+REPOSITORY_CONTRACT = """
+Repository delivery contract: edit this rd_platform repository, not a standalone sample app.
+Production files must be under src/rd_platform/ (.py, .js, .html, .css); add new tests
+under tests/unit/ or tests/service/. Existing tests and the sandbox runtime are protected.
+Return complete contents for each changed file. Preserve current API and UI behavior.
+Prefer small new modules or pages over rewriting a large existing file.
+The candidate will run existing repository tests inside Docker before Git promotion.
+"""
+
+
+def repository_context(root, requirements, max_bytes=48000):
+    """Read bounded, application-owned source context; never include config or credentials."""
+    words = set(re.findall(r'[a-z][a-z_]{2,}', requirements.lower()))
+    files = []
+    for base in (root / 'src/rd_platform', root / 'tests/unit', root / 'tests/service'):
+        for path in base.rglob('*'):
+            if path.is_symlink() or not path.is_file() or path.suffix not in ('.py', '.js', '.html', '.css'):
+                continue
+            relative = path.relative_to(root).as_posix()
+            files.append((relative, path))
+    inventory = sorted(name for name, _ in files)
+    ranked = []
+    for name, path in files:
+        if path.stat().st_size > 100000:
+            continue
+        body = path.read_text(encoding='utf-8')
+        lower = body.lower()
+        score = sum(10 if word in name.lower() else min(lower.count(word), 5) for word in words)
+        if name.endswith(('service/api.py', 'service/static/index.html')):
+            score += 15
+        ranked.append((score, name, body))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    result = 'Repository file inventory:\n' + '\n'.join(inventory)[:8000] + '\nRelevant existing files:\n'
+    for score, name, body in ranked:
+        if score <= 0 or len(result) >= max_bytes:
+            break
+        excerpt = body[:min(len(body), 16000, max_bytes - len(result) - len(name) - 40)]
+        if not excerpt:
+            break
+        result += f'\n--- {name} ---\n{excerpt}\n'
+    return result[:max_bytes]
 
 
 class WorkerConnectionError(RuntimeError):
@@ -133,11 +178,17 @@ class Worker:
         executor = None
         try:
             requirements = job["requirements"]
+            repository_mode = job.get('summary', {}).get('workspace_mode') == 'repository'
+            promoter = WorkspacePromoter(ROOT) if repository_mode else None
+            base_head = promoter.snapshot() if promoter is not None else None
             acceptance = None
             if job["template"] == "lru":
                 fixtures = ROOT / "tests/fixtures/software_team"
                 requirements = (fixtures / "requirements.txt").read_text()
                 acceptance = {"tests/test_acceptance.py": (fixtures / "acceptance.py").read_text()}
+            elif repository_mode:
+                context_budget = max(0, min(48000, 64000 - len(requirements) - len(REPOSITORY_CONTRACT)))
+                requirements += '\n' + REPOSITORY_CONTRACT + '\n' + repository_context(ROOT, requirements, context_budget)
             else:
                 requirements += "\n" + PYTHON_CONTRACT
             if job["backend"] == "configured":
@@ -170,7 +221,9 @@ class Worker:
                 generator = CodexArtifactGenerator(directory / "cli")
             else:
                 generator = LLMArtifactGenerator(create_provider())
-            executor = DockerTestExecutor(directory / "sandbox", ROOT / "sandbox-validation/wheels", acceptance_tests=acceptance)
+            executor = DockerTestExecutor(directory / "sandbox", ROOT / "sandbox-validation/wheels", acceptance_tests=acceptance,
+                image='rd-platform-service:0.3.0-dev' if repository_mode else 'python:3.12-slim',
+                timeout=120 if repository_mode else 30, repository_root=ROOT if repository_mode else None)
 
             async def event(kind, task):
                 if self.stop.is_set() or self.lease_lost.is_set():
@@ -183,9 +236,22 @@ class Worker:
             if job['template'] == 'resume' and not isinstance(seed, dict):
                 raise ValueError('resume run has no checkpoint artifacts')
             summary = asyncio.run(workflow.run(requirements, resume_seed=seed))
+            if repository_mode and summary.get('status') == 'PASS':
+                try:
+                    candidate = CoderArtifacts.model_validate(summary['final_artifacts'])
+                    tested_digest = executor.runs[-1]['receipt']['code_digest']
+                    summary['delivery'] = promoter.promote(job['id'], candidate, base_head=base_head,
+                        tested_digest=tested_digest, test_summary=summary['final_test_summary'],
+                        execution_mode=summary['execution_mode'])
+                    if summary['delivery']['status'] != 'COMMITTED':
+                        summary.update(status='FAILED', delivery_status='COMMITTED_DIRTY',
+                                       error='Git commit succeeded but the workspace changed concurrently')
+                except Exception as exc:
+                    summary.update(status='FAILED', delivery_status='BLOCKED',
+                                   error=f'{type(exc).__name__}: repository promotion failed; inspect evidence')
             summary["calls"] = [{key: value for key, value in call.items() if key in ("role", "elapsed_seconds", "token_usage", "status")}
                                 for call in generator.calls]
-            summary["acceptance"] = "fixed_lru" if acceptance else "generated_tests_only"
+            summary["acceptance"] = "repository_regression" if repository_mode else "fixed_lru" if acceptance else "generated_tests_only"
         except Exception as exc:
             summary = {"status": "FAILED", "error": f"{type(exc).__name__}: worker operation failed; inspect local evidence"}
         finally:

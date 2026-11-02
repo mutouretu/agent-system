@@ -520,7 +520,10 @@ $('workspace-form').addEventListener('submit',async event=>{
   if(!requirements) { $('workspace-error').textContent='请输入研发需求。'; return; }
   submittingWorkspace=true; $('workspace-submit').disabled=true; $('workspace-error').textContent='';
   try {
-    const run=await api('/v1/runs',{method:'POST',body:JSON.stringify({project_id:projectId,requirements,template:requirements===lruRequirement?'lru':'custom',backend:$('workspace-backend').value,max_retries:Number($('workspace-retries').value)})});
+    const example=requirements===lruRequirement;
+    const run=await api('/v1/runs',{method:'POST',body:JSON.stringify({project_id:projectId,requirements,
+      template:example?'lru':'custom',workspace_mode:example?'isolated':'repository',
+      backend:$('workspace-backend').value,max_retries:Number($('workspace-retries').value)})});
     drafts.delete(projectId);
     if(navigation===state.navigation) { $('workspace-requirements').value=''; await openProject(projectId,false,run.id); }
   } catch(error) { if(navigation===state.navigation) $('workspace-error').textContent=error.message; }

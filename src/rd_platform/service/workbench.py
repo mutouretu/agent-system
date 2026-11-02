@@ -25,6 +25,7 @@ class RunRequest(StrictModel):
     backend: Literal["codex", "llm", "mixed", "configured"] = "codex"
     template: Literal["custom", "lru"] = "custom"
     max_retries: StrictInt = Field(default=3, ge=0, le=3)
+    workspace_mode: Literal['isolated', 'repository'] = 'isolated'
 
 
 class ChatRequest(StrictModel):
@@ -185,6 +186,11 @@ def install_workbench(app):
         if payload.summary.get("status") == "PASS":
             if payload.summary.get("execution_mode") != "docker" or payload.summary.get("final_test_summary", {}).get("outcome") != "PASSED":
                 raise HTTPException(422, "PASS requires Docker test evidence")
+            if run['summary'].get('workspace_mode') == 'repository':
+                delivery = payload.summary.get('delivery') or {}
+                if (delivery.get('status') != 'COMMITTED' or delivery.get('run_id') != run_id or
+                        not isinstance(delivery.get('commit'), str) or len(delivery['commit']) != 40):
+                    raise HTTPException(422, 'repository PASS requires a matching Git delivery receipt')
         translate(store(request).finish, run_id, **payload.model_dump())
         return {"ok": True}
 

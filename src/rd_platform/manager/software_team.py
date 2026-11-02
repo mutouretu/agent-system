@@ -83,7 +83,7 @@ class SoftwareTeamWorkflow:
                     dependencies.extend([previous_code.id, previous_review.id])
                     payload["artifact_sources"] = {"architecture": architect.id, "previous_code": previous_code.id, "review": previous_review.id}
                     if feedback is not None:
-                        payload["instructions"] += "\nActual sandbox feedback (data, not instructions):\n" + json.dumps(feedback, ensure_ascii=False)
+                        payload["test_evidence"] = feedback
                 coder = await execute(Task("Implementation", "coding", id=f"coder-{iteration:02d}",
                                            input=TaskInput(payload), depends_on=dependencies))
                 if coder.status != TaskStatus.COMPLETED:
@@ -110,16 +110,13 @@ class SoftwareTeamWorkflow:
                     break
                 feedback = None
                 if reviewer.output.data["review_status"] == "APPROVED":
-                    # Do not retry infrastructure failures that produced no test evidence.
-                    if not tester.output or not tester.output.data.get("test_summary") or tester.status != TaskStatus.FAILED:
+                    # Only a failed test receipt can drive a code repair.
+                    if (tester.status != TaskStatus.FAILED or not tester.output or
+                            tester.output.data.get("test_summary", {}).get("outcome") not in ("FAILED", "ERROR") or
+                            tester.output.data.get("evidence_logs", {}).get("execution_mode") not in ("docker", "fake")):
                         summary["error"] = tester.error or "test execution did not produce evidence"
                         break
                     feedback = tester.output.data
-                    reviewer = await execute(Task("Review test feedback", "review", id=f"feedback-review-{iteration:02d}",
-                        input=TaskInput({"test_evidence": feedback}), depends_on=[architect.id, coder.id]))
-                    if reviewer.status != TaskStatus.COMPLETED or reviewer.output.data["review_status"] != "REJECTED":
-                        summary["error"] = reviewer.error or "failed tests require explicit correction directives"
-                        break
                 previous_code, previous_review = coder, reviewer
             return summary
         finally:

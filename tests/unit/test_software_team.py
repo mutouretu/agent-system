@@ -114,14 +114,16 @@ def test_review_rejection_revises_before_testing(tmp_path):
     assert coder_calls[1].input_data["previous_code"]["files"] == CODE["files"]
 
 
-def test_test_failure_is_reviewed_and_repaired(tmp_path):
+def test_test_failure_goes_directly_to_coder_and_repairs(tmp_path):
     generator, executor = FakeGenerator(), FakeExecutor(fail_first=True)
     result = asyncio.run(SoftwareTeamWorkflow(generator, executor, tmp_path).run("implement cache"))
     assert result["status"] == "PASS" and result["iteration_count"] == 1 and executor.calls == 2
     assert result["pass_rates"] == [0, 100] and result["monotonic_nondecreasing"] is True
-    feedback_review = next(call for call in generator.calls if "test_evidence" in call.input_data)
-    assert feedback_review.input_data["test_evidence"]["test_summary"]["outcome"] == "FAILED"
-    assert "simulated assertion failure" in [call for call in generator.calls if call.role.value == "CODER"][1].input_data["instructions"]
+    coder_calls = [call for call in generator.calls if call.role.value == "CODER"]
+    assert len(coder_calls) == 2
+    assert coder_calls[1].input_data["test_evidence"]["test_summary"]["outcome"] == "FAILED"
+    assert "simulated assertion failure" in coder_calls[1].input_data["test_evidence"]["evidence_logs"]["logs"]
+    assert [call.role.value for call in generator.calls].count("REVIEWER") == 2
 
 
 def test_revision_limit_cannot_be_bypassed(tmp_path):

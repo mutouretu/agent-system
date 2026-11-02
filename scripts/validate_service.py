@@ -52,7 +52,7 @@ def main():
                                   "pytest==8.3.5", "docker==7.1.0", "httpx==0.28.1"]),
                 ("pytest", ["/usr/bin/env", "PYTHONPATH=/tmp/deps:/workspace/src:/workspace", "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
                             "python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml=/output/pytest.xml",
-                            "/workspace/tests/unit", "/workspace/tests/service"]),
+                            "/workspace/tests"]),
             ):
                 code, stdout, stderr = box.exec_run(command)
                 save(f"{label}.json", {"exit_code": code, "stdout": stdout, "stderr": stderr})

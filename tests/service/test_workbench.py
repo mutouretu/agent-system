@@ -97,6 +97,24 @@ def test_project_run_persistence_across_restart(settings):
         assert client.get(f"/v1/projects/{run['project_id']}/").status_code == 200
 
 
+def test_repository_run_requires_git_delivery_before_completion(client):
+    run = submit(client, workspace_mode='repository')
+    assert run['summary']['workspace_mode'] == 'repository'
+    headers, worker_id = worker(client)
+    claimed = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    path = f"/internal/worker/runs/{run['id']}/finish"
+    base = {'status': 'PASS', 'execution_mode': 'docker',
+            'final_test_summary': {'outcome': 'PASSED', 'total': 1,
+                                   'counts': {'passed': 1, 'failed': 0, 'errors': 0, 'skipped': 0}}}
+    assert client.post(path, headers=headers,
+        json={'worker_id': worker_id, 'generation': claimed['generation'], 'summary': base}).status_code == 422
+    delivered = {**base, 'delivery': {'status': 'COMMITTED', 'run_id': run['id'], 'commit': 'a' * 40}}
+    assert client.post(path, headers=headers,
+        json={'worker_id': worker_id, 'generation': claimed['generation'], 'summary': delivered}).status_code == 200
+    result = client.get(f"/v1/runs/{run['id']}").json()
+    assert result['status'] == 'COMPLETED' and result['summary']['delivery']['commit'] == 'a' * 40
+
+
 def test_project_details_keep_context_and_scope_run_history(client):
     project = client.post("/v1/projects", json={
         "name": "Project details", "context": {"description": "Build a cache"},

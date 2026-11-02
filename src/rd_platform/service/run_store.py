@@ -131,15 +131,17 @@ class RunStore:
             return project
 
     def expire(self, db):
-        stale = db.execute(select(runs.c.id).where(runs.c.status == "RUNNING", runs.c.lease_until < time.time())
-                           .with_for_update(skip_locked=True)).scalars().all()
-        for run_id in stale:
-            summary = {"status": "FAILED", "error": "Worker lease expired; inspect evidence and start a new run"}
+        stale = db.execute(select(runs.c.id, runs.c.summary).where(runs.c.status == "RUNNING", runs.c.lease_until < time.time())
+                           .with_for_update(skip_locked=True)).all()
+        for run_id, previous in stale:
+            summary = {**{key: previous[key] for key in ('agent_config', 'parent_run_id', 'workspace_mode') if key in previous},
+                       "status": "FAILED", "error": "Worker lease expired; inspect evidence and resume from a checkpoint"}
             db.execute(runs.update().where(runs.c.id == run_id).values(status="INTERRUPTED", summary=summary,
                        updated_at=time.time(), generation=runs.c.generation + 1))
             self.event(db, run_id, "run_finished", {"status": "INTERRUPTED", "error": summary["error"]})
 
-    def create_run(self, project_id, backend, requirements, template="custom", max_retries=3):
+    def create_run(self, project_id, backend, requirements, template="custom", max_retries=3,
+                   workspace_mode='isolated'):
         now = time.time()
         record = dict(id=uuid.uuid4().hex, project_id=project_id, status="QUEUED", backend=backend,
                       requirements=requirements, template=template, max_retries=max_retries,
@@ -148,11 +150,14 @@ class RunStore:
             project = db.scalar(select(projects.c.payload).where(projects.c.id == project_id).with_for_update())
             if project is None:
                 raise KeyError(project_id)
+            if workspace_mode not in ('isolated', 'repository') or (template != 'custom' and workspace_mode == 'repository'):
+                raise StoreConflict('仅自定义研发任务支持主项目工作区模式')
+            record['summary'] = {'workspace_mode': workspace_mode}
             if backend == "configured":
                 config = project.get("context", {}).get("agent_config")
                 if not config:
                     raise StoreConflict("请先保存 Agent 配置")
-                record["summary"] = {"agent_config": config}
+                record["summary"]["agent_config"] = config
             if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(["QUEUED", "RUNNING"]))) >= 100:
                 raise StoreConflict("active run capacity reached (100)")
             db.execute(runs.insert().values(**record))
@@ -210,6 +215,7 @@ class RunStore:
                     raise StoreConflict('缺少项目 Agent 配置，无法恢复')
             summary = {'parent_run_id': parent_id, 'resume_from_task': selected,
                        'resume_seed': {'parent_run_id': parent_id, 'target_task_id': selected, 'tasks': checked}}
+            summary['workspace_mode'] = parent['summary'].get('workspace_mode', 'isolated')
             if snapshot:
                 summary['agent_config'] = snapshot
             record = dict(id=uuid.uuid4().hex, project_id=parent['project_id'], status='QUEUED',
@@ -239,7 +245,7 @@ class RunStore:
             record.pop("requirements", None)
             record["summary"] = {key: value for key, value in record["summary"].items()
                                  if key in ("status", "error", "iteration_count", "final_test_summary", "elapsed_seconds",
-                                            "parent_run_id", "resume_from_task", "acceptance")}
+                                            "parent_run_id", "resume_from_task", "acceptance", "workspace_mode", "delivery")}
         return record
 
     def get_run(self, run_id):
@@ -404,7 +410,7 @@ class RunStore:
         with self.transaction() as db:
             row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
             if row:
-                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task')
+                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task', 'workspace_mode')
                               if key in row['summary']}, **summary}
             if row and row["status"] in ("COMPLETED", "FAILED") and row["worker_id"] == worker_id and row["generation"] == generation and row["summary"] == summary:
                 return

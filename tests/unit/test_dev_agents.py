@@ -231,6 +231,25 @@ def test_correction_input_validates_previous_revision_without_auto_retry():
     assert len(backend.calls) == 1
 
 
+def test_coder_accepts_matching_failed_test_evidence_after_approved_review():
+    previous = S.CoderArtifacts.model_validate(code())
+    digest = S.code_digest(previous)
+    evidence = S.TesterArtifacts(
+        test_summary=S.TestSummary(outcome='FAILED', total=1,
+            counts={'passed': 0, 'failed': 1, 'errors': 0, 'skipped': 0}, pass_rate=0.0),
+        evidence_logs=S.EvidenceLogs(code_digest=digest, execution_mode='docker',
+            run_id='sandbox-1', exit_code=1, logs='AssertionError: expected 2')).model_dump()
+    backend = FakeGenerator(code())
+    payload = {'architecture': architecture(), 'previous_code': code(),
+               'review': review(True), 'test_evidence': evidence}
+    result = run(dev.CoderAgent(backend), payload)
+    assert result.status == AgentStatus.COMPLETED
+    assert 'AssertionError' in backend.calls[0].input_data['test_evidence']['evidence_logs']['logs']
+    payload['test_evidence']['evidence_logs']['code_digest'] = '0' * 64
+    assert run(dev.CoderAgent(backend), payload).status == AgentStatus.FAILED
+    assert len(backend.calls) == 1
+
+
 def test_unconfigured_roles_are_blocked_and_tester_does_not_invent_metrics():
     assert run(dev.ArchitectAgent(), {"requirements": "build"}).status == AgentStatus.BLOCKED
     assert run(dev.CoderAgent(), {"architecture": architecture()}).status == AgentStatus.BLOCKED
