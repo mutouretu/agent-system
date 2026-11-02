@@ -29,6 +29,8 @@ class RunRequest(StrictModel):
 
 class ChatRequest(StrictModel):
     message: str = Field(min_length=1, max_length=4000, pattern=r"\S")
+    action: Literal['discuss', 'resume'] = 'discuss'
+    task_id: str | None = Field(default=None, pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 
 
 class ResumeRequest(StrictModel):
@@ -100,7 +102,7 @@ def install_workbench(app):
 
     @app.post("/v1/runs/{run_id}/chat", status_code=202)
     def send_chat(run_id: str, payload: ChatRequest, request: Request):
-        return translate(store(request).create_chat, run_id, payload.message.strip())
+        return translate(store(request).create_chat, run_id, payload.message.strip(), payload.action, payload.task_id)
 
     @app.get("/v1/runs/{run_id}/artifacts")
     def artifacts(run_id: str, request: Request):

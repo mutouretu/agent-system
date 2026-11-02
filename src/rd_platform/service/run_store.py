@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 import json
-import re
 import time
 import uuid
 
@@ -34,28 +33,23 @@ TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
 LEASE_SECONDS = 90
 
 
-def resume_intent(message):
-    """Recognize only explicit continuation commands; questions remain discussion."""
-    text = message.strip()
-    if re.search(r'[?？]|不要|别|暂不|先不|停止|取消|怎么|如何|为什么|能否|是否|可以|讨论|解释|说明', text):
-        return False
-    return bool(re.search(r'(请|现在|马上|直接|立刻|从).{0,100}(继续|恢复|续跑|重试)', text, re.I)
-                and re.search(r'流程|运行|开发|任务|节点|阶段|review|coder|tester|architect|审查|评审|测试|编码|架构', text, re.I))
-
-
-def resume_task_from_message(message, tasks):
-    explicit = re.search(r'(architect|coder|reviewer|tester)(?:-\d\d)?', message, re.I)
-    if explicit:
-        role = explicit.group(1).lower()
-        match = next((task for task in reversed(tasks) if task['id'].lower() == explicit.group().lower()
-                      or task['id'].lower().startswith(role + '-')), None)
-        return match['id'] if match else None
-    for phrase, capability in [('架构', 'architecture'), ('编码', 'coding'), ('开发', 'coding'),
-                               ('审查', 'review'), ('评审', 'review'), ('测试', 'testing')]:
-        if re.search(r'从.{0,12}' + phrase, message):
-            match = next((task for task in reversed(tasks) if task['capability'] == capability), None)
-            return match['id'] if match else None
-    return None
+def chat_task_evidence(task):
+    """Bounded role evidence for Team Lead; source files stay in artifact storage."""
+    output = task.get('output') or {}
+    role = task.get('capability')
+    if role == 'coding':
+        result = {'files': list((output.get('files') or {}).keys()),
+                  'tests': list((output.get('tests') or {}).keys()),
+                  'commit_message': output.get('commit_message')}
+    elif role == 'testing':
+        logs = output.get('evidence_logs') or {}
+        result = {'test_summary': output.get('test_summary'),
+                  'evidence_logs': {key: logs.get(key) for key in ('execution_mode', 'exit_code', 'run_id')},
+                  'test_logs': str(logs.get('logs') or '')[:8000]}
+    else:
+        result = output
+    return {'id': task.get('id'), 'role': role, 'status': task.get('status'),
+            'error': str(task.get('error') or '')[:8000], 'output': result}
 
 
 class StoreConflict(ValueError):
@@ -244,7 +238,8 @@ class RunStore:
             record.pop("tasks", None)
             record.pop("requirements", None)
             record["summary"] = {key: value for key, value in record["summary"].items()
-                                 if key in ("status", "error", "iteration_count", "final_test_summary", "elapsed_seconds")}
+                                 if key in ("status", "error", "iteration_count", "final_test_summary", "elapsed_seconds",
+                                            "parent_run_id", "resume_from_task", "acceptance")}
         return record
 
     def get_run(self, run_id):
@@ -262,6 +257,19 @@ class RunStore:
             .order_by(runs.c.created_at, runs.c.id).limit(50)).mappings().all()
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _related_resume_rows(db, parent):
+        found, frontier = [], [parent['id']]
+        for _ in range(4):
+            rows = db.execute(select(runs).where(runs.c.project_id == parent['project_id'],
+                runs.c.template == 'resume', runs.c.summary['parent_run_id'].as_string().in_(frontier))
+                .order_by(runs.c.created_at.desc()).limit(12)).mappings().all()
+            if not rows:
+                break
+            found.extend(dict(row) for row in rows)
+            frontier = [row['id'] for row in rows]
+        return sorted(found, key=lambda row: row['created_at'], reverse=True)[:4]
+
     def get_chat(self, parent_id):
         with self.transaction() as db:
             parent = db.execute(select(runs.c.id, runs.c.template).where(runs.c.id == parent_id)).first()
@@ -272,7 +280,7 @@ class RunStore:
                      "resume_run_id": row['summary'].get('resume_run_id'),
                      "created_at": row['created_at']} for row in self._chat_rows(db, parent_id)]
 
-    def create_chat(self, parent_id, message):
+    def create_chat(self, parent_id, message, action='discuss', task_id=None):
         now = time.time()
         with self.transaction() as db:
             parent = db.execute(select(runs).where(runs.c.id == parent_id).with_for_update()).mappings().first()
@@ -283,19 +291,35 @@ class RunStore:
                 raise StoreConflict('上一条讨论仍在处理，请等待回复')
             if len(history) >= 50:
                 raise StoreConflict('本轮讨论已达 50 条上限')
-            action = None
-            if resume_intent(message):
-                if parent['status'] not in ('FAILED', 'INTERRUPTED'):
+            requested_action = None
+            related = self._related_resume_rows(db, parent)
+            if action == 'resume':
+                current = related[0] if related else parent
+                if current['status'] in ('QUEUED', 'RUNNING', 'COMPLETED'):
+                    requested_action = {'type': 'report_existing', 'run_id': current['id'],
+                                        'status': current['status'],
+                                        'final_test_summary': current['summary'].get('final_test_summary'),
+                                        'acceptance': current['summary'].get('acceptance')}
+                elif current['status'] not in ('FAILED', 'INTERRUPTED'):
                     raise StoreConflict('当前运行尚未失败或中断，无需恢复')
-                action = {'type': 'resume', 'task_id': resume_task_from_message(message, parent['tasks'])}
+                else:
+                    requested_action = {'type': 'resume', 'parent_run_id': current['id'], 'task_id': task_id}
+            elif action != 'discuss' or task_id is not None:
+                raise StoreConflict('无效的会话动作')
             if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(['QUEUED', 'RUNNING']))) >= 100:
                 raise StoreConflict('active run capacity reached (100)')
-            task_context = [{"role": task.get('capability'), "status": task.get('status'),
-                             "error": str(task.get('error') or '')[:8000],
-                             "output": task.get('output')} for task in parent['tasks'][-8:]]
-            context = {"original_requirement": parent['requirements'][:16000],
-                       "run_status": parent['status'], "run_error": str(parent['summary'].get('error') or '')[:10000],
-                       "tasks": task_context,
+            related_context = [{'run_id': row['id'], 'status': row['status'],
+                'resume_from_task': row['summary'].get('resume_from_task'),
+                'error': str(row['summary'].get('error') or '')[:4000],
+                'acceptance': row['summary'].get('acceptance'),
+                'final_test_summary': row['summary'].get('final_test_summary'),
+                'tasks': [chat_task_evidence(task) for task in row['tasks'][-6:]]}
+                for row in related]
+            context = {"related_runs_newest_first": related_context,
+                       "original_run_id": parent_id,
+                       "original_requirement": parent['requirements'][:12000],
+                       "run_status": parent['status'], "run_error": str(parent['summary'].get('error') or '')[:8000],
+                       "tasks": [chat_task_evidence(task) for task in parent['tasks'][-8:]],
                        "discussion": [{"question": item['requirements'][:2000],
                                        "answer": str(item['summary'].get('answer') or '')[:4000]}
                                       for item in history[-8:]]}
@@ -305,8 +329,8 @@ class RunStore:
                 project = db.scalar(select(projects.c.payload).where(projects.c.id == parent['project_id']))
                 snapshot = project.get('context', {}).get('agent_config') if project else None
             summary = {"parent_run_id": parent_id, "chat_context": context_text}
-            if action:
-                summary['action'] = action
+            if requested_action:
+                summary['action'] = requested_action
             if snapshot:
                 summary['agent_config'] = snapshot
             record = dict(id=uuid.uuid4().hex, project_id=parent['project_id'], status='QUEUED',

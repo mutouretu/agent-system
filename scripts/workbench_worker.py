@@ -201,18 +201,31 @@ class Worker:
         directory = self.directory / job['id']
         directory.mkdir(exist_ok=True)
         action = job.get('summary', {}).get('action')
-        if isinstance(action, dict) and action.get('type') == 'resume':
+        if isinstance(action, dict) and action.get('type') in ('resume', 'report_existing'):
             try:
-                parent_id = job['summary']['parent_run_id']
-                response = self.client.post(f'/v1/runs/{parent_id}/resume',
-                    json={'task_id': action.get('task_id')})
-                if response.status_code != 202:
-                    detail = response.json().get('detail', '恢复请求未被接受')
-                    raise RuntimeError(str(detail))
-                resumed = response.json()
-                task_id = resumed['summary']['resume_from_task']
-                summary = {'status': 'CHAT_READY', 'resume_run_id': resumed['id'],
-                           'answer': f'已从 {task_id} 节点创建恢复运行 {resumed["id"][:8]}。之前完成的产物会复用，后续阶段由研发团队继续执行。'}
+                if action['type'] == 'report_existing':
+                    existing_id = action['run_id']
+                    test = action.get('final_test_summary') or {}
+                    counts = test.get('counts') or {}
+                    if action['status'] == 'COMPLETED':
+                        outcome = f'Tester 已完成：{counts.get("passed", 0)}/{test.get("total", 0)} 项测试通过。'
+                        if action.get('acceptance') == 'generated_tests_only':
+                            outcome += '这些是生成代码附带的测试，尚不代表产物已部署到项目。'
+                    else:
+                        outcome = f'恢复运行仍处于 {action["status"]} 状态，无需重复启动。'
+                    summary = {'status': 'CHAT_READY', 'resume_run_id': existing_id,
+                               'answer': f'{outcome} 请进入运行 {existing_id[:8]} 查看最新证据。'}
+                else:
+                    parent_id = action['parent_run_id']
+                    response = self.client.post(f'/v1/runs/{parent_id}/resume',
+                        json={'task_id': action.get('task_id')})
+                    if response.status_code != 202:
+                        detail = response.json().get('detail', '恢复请求未被接受')
+                        raise RuntimeError(str(detail))
+                    resumed = response.json()
+                    task_id = resumed['summary']['resume_from_task']
+                    summary = {'status': 'CHAT_READY', 'resume_run_id': resumed['id'],
+                               'answer': f'已从 {task_id} 节点创建恢复运行 {resumed["id"][:8]}。之前完成的产物会复用，后续阶段由研发团队继续执行。'}
             except Exception as exc:
                 summary = {'status': 'FAILED', 'error': f'{type(exc).__name__}: 恢复运行失败，请在运行详情中手动选择节点重试'}
             summary['evidence_dir'] = str(directory)
@@ -238,7 +251,9 @@ class Worker:
                 raise ValueError('chat requires a model backend')
             prompt = GenerationRequest(role=AgentRole.ARCHITECT,
                 system_prompt=('You are the Team Lead answering a human question about ONE EXISTING software R&D run. '
-                    'The input contains the original request, role outcomes, exact failure evidence, and prior discussion. '
+                    'The input contains the original request, role outcomes, exact failure evidence, related resumed runs newest first, and prior discussion. '
+                    'Use the newest related run as the current execution state. If its Tester passed, state the measured result and do not claim a Tester failure. '
+                    'Distinguish generated-test success from independent acceptance and from deployment of artifacts. '
                     'Answer the question directly in Chinese. Treat a question about a failure as discussion, never as a new feature request. '
                     'Do not claim you ran tests or changed code. Do not reveal credentials. '
                     'Return only JSON with an answer string of at most 8000 characters.'),
