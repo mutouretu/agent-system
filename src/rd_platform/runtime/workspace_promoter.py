@@ -74,6 +74,10 @@ class WorkspacePromoter:
                             os.fsync(stream.fileno())
                         if previous[path] is not None:
                             os.chmod(temporary, stat.S_IMODE(target.stat().st_mode))
+                        else:
+                            # mkstemp defaults to 0600; the service container reads
+                            # promoted source as a different, unprivileged UID.
+                            os.chmod(temporary, 0o644)
                         os.replace(temporary, target)
                     finally:
                         if os.path.exists(temporary):

@@ -323,46 +323,44 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             raise HTTPException(413, "dataset exceeds 1 MiB")
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=settings.data, delete=False) as handle:
-                handle.write(content)
-                temporary = Path(handle.name)
-                handle.flush()
-                os.fsync(handle.fileno())
+            with tempfile.NamedTemporaryFile(dir=settings.data, prefix=".dataset-", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(temporary, path)
         finally:
-            if temporary is not None and temporary.exists():
+            if temporary is not None:
                 temporary.unlink(missing_ok=True)
-        return {**payload.model_dump(), "sha256": hashlib.sha256(content).hexdigest()}
+        logger.info("stored dataset=%s records=%s", name, len(payload.records))
+        return {"dataset": name, "count": len(payload.records), "sha256": hashlib.sha256(content).hexdigest()}
 
     @app.get("/v1/data/{name}")
     async def get_dataset(name: str):
         path = dataset_path(name)
         try:
-            info = path.lstat()
+            # Refuse symlinks and non-regular files; no paths supplied by clients.
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+                    raise HTTPException(422, "invalid dataset file")
+                raw = stream.read(MAX_BYTES + 1)
+                if len(raw) > MAX_BYTES:
+                    raise HTTPException(413, "dataset exceeds 1 MiB")
+            payload = Records.model_validate_json(raw)
         except FileNotFoundError:
             raise HTTPException(404, "dataset not found") from None
-        if not stat.S_ISREG(info.st_mode) or path.is_symlink():
-            raise HTTPException(422, "dataset must be a regular file")
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError):
-            raise HTTPException(422, "dataset is corrupt") from None
-        return data
+        except (OSError, ValueError):
+            raise HTTPException(422, "invalid dataset file") from None
+        return {"dataset": name, "records": payload.model_dump()["records"], "count": len(payload.records)}
 
     @app.get("/v1/models")
-    async def list_models():
-        models = []
-        try:
-            entries = list(settings.models.iterdir())
-        except OSError:
-            entries = []
-        for entry in sorted(entries, key=lambda item: item.name):
-            try:
-                if entry.is_symlink() or not entry.is_file():
-                    continue
-            except OSError:
-                continue
-            models.append(entry.name)
-        return {"models": models, "read_only": True}
+    async def models():
+        names = sorted(path.name for path in settings.models.iterdir() if path.is_file() and not path.is_symlink())[:100]
+        return {"models": names, "read_only": True}
 
     return app
+
+
+app = create_app()

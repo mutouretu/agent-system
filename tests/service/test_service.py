@@ -12,6 +12,11 @@ from rd_platform.service.api import MAX_BYTES, Settings, create_app
 from rd_platform.service import probe_api
 
 
+def test_service_module_exports_asgi_app():
+    from rd_platform.service.api import app
+    assert app is not None
+
+
 @pytest.fixture
 def service(tmp_path):
     settings = Settings(*(tmp_path / name for name in ("data", "logs", "models")))

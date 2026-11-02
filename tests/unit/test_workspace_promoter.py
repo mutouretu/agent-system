@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+import stat
 
 import pytest
 
@@ -80,6 +81,7 @@ def test_promoter_commits_only_verified_candidate(repository):
     assert result['status'] == 'COMMITTED' and result['commit'] == 'b' * 40
     assert (repository / 'src/rd_platform/service/feature.py').read_text() == 'NEW = True\n'
     assert (repository / 'tests/service/test_new_feature.py').read_text().startswith('def test_new')
+    assert stat.S_IMODE((repository / 'tests/service/test_new_feature.py').stat().st_mode) == 0o644
     assert set(transport.staged) == set(result['files'])
     assert next(args for args in transport.commands if args[0] == 'commit')[2].startswith('feat: Auto-delivered')
 
