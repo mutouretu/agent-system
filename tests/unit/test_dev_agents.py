@@ -32,7 +32,8 @@ def code():
 
 def rejected():
     return {"review_status": "REJECTED", "issues": [{"file": "src/cache.py", "line": 1, "severity": "ERROR",
-            "message": "missing operations", "suggestion": "implement get and put"}],
+            "message": "missing operations", "suggestion": "implement get and put",
+            "blocker_type": "API_CONTRACT", "blocker_evidence": "cache API requires get and put"}],
             "correction_directives": [{"file": "src/cache.py", "instruction": "implement get and put with eviction"}]}
 
 
@@ -230,6 +231,25 @@ def test_reviewer_preserves_missing_file_finding_without_claiming_location():
     assert result.artifacts['issues'][0]['file'] is None
     assert result.artifacts['issues'][0]['line'] is None
     assert result.artifacts['issues'][0]['message'] == finding['issues'][0]['message']
+
+
+def test_reviewer_downgrades_unsubstantiated_blocker_and_keeps_warning():
+    decision = {'review_status': 'REJECTED', 'issues': [
+        {'severity': 'BLOCKER', 'message': 'Style could be improved', 'suggestion': 'Rename variable'},
+    ], 'correction_directives': [{'instruction': 'Rename variable'}]}
+    result = run(dev.ReviewerAgent(FakeGenerator(decision)),
+                 {'architecture': architecture(), 'code': code()})
+    assert result.status == AgentStatus.COMPLETED
+    assert result.artifacts['review_status'] == 'APPROVED'
+    assert result.artifacts['issues'][0]['severity'] == 'WARNING'
+    assert result.artifacts['correction_directives'] == []
+
+
+def test_reviewer_retains_evidenced_api_contract_blocker():
+    result = run(dev.ReviewerAgent(FakeGenerator(rejected())),
+                 {'architecture': architecture(), 'code': code()})
+    assert result.artifacts['review_status'] == 'REJECTED'
+    assert result.artifacts['issues'][0]['severity'] == 'BLOCKER'
 
 
 def test_reviewer_format_repair_is_bounded_and_never_forges_approval():

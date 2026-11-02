@@ -5,7 +5,7 @@ import pytest
 
 from examples.software_team_demo import decode_artifact
 from rd_platform.agents.dev.schemas import SandboxTestResult, code_digest
-from rd_platform.manager.software_team import SoftwareTeamWorkflow
+from rd_platform.manager.software_team import SoftwareTeamWorkflow, runtime_blocker_downgrade
 from rd_platform.runtime.test_executor import DockerTestExecutor, RUNNER, parse_junit, read_report
 
 
@@ -17,7 +17,8 @@ ARCHITECTURE = {
 CODE = {"files": {"src/cache.py": "class Cache: pass\n"}, "tests": {"tests/test_cache.py": "def test_cache(): assert True\n"},
         "commit_message": "implement"}
 REJECTED = {"review_status": "REJECTED", "issues": [{"file": "src/cache.py", "severity": "ERROR",
-    "message": "incomplete", "suggestion": "implement operations"}],
+    "message": "incomplete", "suggestion": "implement operations", "blocker_type": "API_CONTRACT",
+    "blocker_evidence": "cache contract requires get and put"}],
     "correction_directives": [{"file": "src/cache.py", "instruction": "implement operations"}]}
 
 
@@ -104,11 +105,12 @@ def test_resume_at_any_first_iteration_role(tmp_path, target, expected_roles):
     assert [call.role.value for call in generator.calls] == expected_roles
 
 
-def test_review_rejection_revises_before_testing(tmp_path):
+def test_review_rejection_keeps_diagnostic_test_separate_from_approval(tmp_path):
     generator, executor = FakeGenerator(reject_first=True), FakeExecutor()
     result = asyncio.run(SoftwareTeamWorkflow(generator, executor, tmp_path).run("implement cache"))
-    assert result["status"] == "PASS" and result["iteration_count"] == 1 and executor.calls == 1
-    assert result["attempts"][0]["tester_status"] == "BLOCKED"
+    assert result["status"] == "PASS" and result["iteration_count"] == 1 and executor.calls == 2
+    assert result["attempts"][0]["tester_status"] == "COMPLETED"
+    assert result["attempts"][0]["review_status"] == "REJECTED"
     coder_calls = [call for call in generator.calls if call.role.value == "CODER"]
     assert coder_calls[1].input_data["review"]["review_status"] == "REJECTED"
     assert coder_calls[1].input_data["previous_code"]["files"] == CODE["files"]
@@ -126,11 +128,31 @@ def test_test_failure_goes_directly_to_coder_and_repairs(tmp_path):
     assert [call.role.value for call in generator.calls].count("REVIEWER") == 2
 
 
+def test_rejected_review_and_failed_diagnostic_test_both_reach_coder(tmp_path):
+    generator, executor = FakeGenerator(reject_first=True), FakeExecutor(fail_first=True)
+    result = asyncio.run(SoftwareTeamWorkflow(generator, executor, tmp_path).run("cache"))
+    assert result["status"] == "PASS" and result["pass_rates"] == [0, 100]
+    coder_calls = [call for call in generator.calls if call.role.value == "CODER"]
+    assert coder_calls[1].input_data["review"]["review_status"] == "REJECTED"
+    assert "simulated assertion failure" in coder_calls[1].input_data["test_evidence"]["evidence_logs"]["logs"]
+
+
 def test_revision_limit_cannot_be_bypassed(tmp_path):
     executor = FakeExecutor()
     result = asyncio.run(SoftwareTeamWorkflow(FakeGenerator(reject_always=True), executor, tmp_path, max_retries=2).run("cache"))
     assert result["status"] == "FAILED" and result["iteration_count"] == 2
-    assert len(result["attempts"]) == 3 and executor.calls == 0
+    assert len(result["attempts"]) == 3 and executor.calls == 3
+    assert all(attempt["review_status"] == "REJECTED" for attempt in result["attempts"])
+
+
+def test_only_docker_pass_can_downgrade_runtime_blocker():
+    review = {'issues': [{'severity': 'BLOCKER', 'blocker_type': 'BUILD_RUNTIME'}]}
+    passed = {'outcome': 'PASSED', 'pass_rate': 100}
+    assert runtime_blocker_downgrade(review, passed, 'docker')
+    assert not runtime_blocker_downgrade(review, passed, 'fake')
+    assert not runtime_blocker_downgrade(review, {'outcome': 'FAILED', 'pass_rate': 90}, 'docker')
+    review['issues'].append({'severity': 'BLOCKER', 'blocker_type': 'SECURITY'})
+    assert not runtime_blocker_downgrade(review, passed, 'docker')
 
 
 @pytest.mark.parametrize("maximum", [-1, 4, True])

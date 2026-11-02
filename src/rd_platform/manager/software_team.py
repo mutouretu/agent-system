@@ -15,6 +15,14 @@ def save(path, data):
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def runtime_blocker_downgrade(review, test_summary, execution_mode):
+    """A full Docker pass rebuts only build/runtime claims, never security or API defects."""
+    blockers = [issue for issue in review.get("issues", []) if issue.get("severity") == "BLOCKER"]
+    return (bool(blockers) and all(issue.get("blocker_type") == "BUILD_RUNTIME" for issue in blockers)
+            and execution_mode == "docker" and test_summary.get("outcome") == "PASSED"
+            and test_summary.get("pass_rate") == 100)
+
+
 class SoftwareTeamWorkflow:
     def __init__(self, generator, executor, evidence_dir, *, max_retries=3, task_timeout=600, on_event=None):
         if type(max_retries) is not int or not 0 <= max_retries <= 3:
@@ -95,28 +103,36 @@ class SoftwareTeamWorkflow:
                     summary["error"] = reviewer.error
                     break
                 tester = await execute(Task("Sandbox tests", "testing", id=f"tester-{iteration:02d}",
+                                             input=TaskInput({"diagnostic": reviewer.output.data["review_status"] == "REJECTED"}),
                                              depends_on=[coder.id, reviewer.id]))
                 attempt = {"iteration": iteration, "coder": coder.id, "reviewer": reviewer.id, "tester": tester.id,
                            "review_status": reviewer.output.data["review_status"], "tester_status": tester.status.value,
                            "test_summary": tester.output.data.get("test_summary") if tester.output else None}
                 summary["attempts"].append(attempt)
-                if tester.status == TaskStatus.COMPLETED:
+                runtime_claim_disproved = tester.output is not None and runtime_blocker_downgrade(
+                    reviewer.output.data, tester.output.data["test_summary"],
+                    tester.output.data["evidence_logs"]["execution_mode"])
+                if tester.status == TaskStatus.COMPLETED and (
+                    reviewer.output.data["review_status"] == "APPROVED" or runtime_claim_disproved
+                ):
                     summary.update(status="PASS", final_artifacts=coder.output.data,
                                    final_test_summary=tester.output.data["test_summary"],
                                    execution_mode=tester.output.data["evidence_logs"]["execution_mode"])
+                    if runtime_claim_disproved:
+                        summary["review_adjudication"] = "runtime blocker downgraded after complete sandbox test pass"
                     break
                 if iteration == self.max_retries:
                     summary["error"] = "revision limit reached"
                     break
                 feedback = None
-                if reviewer.output.data["review_status"] == "APPROVED":
-                    # Only a failed test receipt can drive a code repair.
-                    if (tester.status != TaskStatus.FAILED or not tester.output or
-                            tester.output.data.get("test_summary", {}).get("outcome") not in ("FAILED", "ERROR") or
-                            tester.output.data.get("evidence_logs", {}).get("execution_mode") not in ("docker", "fake")):
-                        summary["error"] = tester.error or "test execution did not produce evidence"
-                        break
+                if tester.status == TaskStatus.FAILED and tester.output and (
+                    tester.output.data.get("test_summary", {}).get("outcome") in ("FAILED", "ERROR") and
+                    tester.output.data.get("evidence_logs", {}).get("execution_mode") in ("docker", "fake")
+                ):
                     feedback = tester.output.data
+                elif reviewer.output.data["review_status"] == "APPROVED":
+                    summary["error"] = tester.error or "test execution did not produce evidence"
+                    break
                 previous_code, previous_review = coder, reviewer
             return summary
         finally:

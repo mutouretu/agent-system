@@ -20,13 +20,13 @@ class TesterAgent(BaseAgent):
 
     async def run(self, request: AgentInput) -> AgentOutput:
         try:
-            payload = input_payload(request, {"code", "review"})
+            payload = input_payload(request, {"code", "review", "diagnostic"})
             code = resolve(request, payload, "code", CoderArtifacts)
             review = resolve(request, payload, "review", ReviewerArtifacts)
             digest = code_digest(code)
             if review.code_digest != digest:
                 return self.not_run(digest, "review does not match the current code")
-            if review.review_status != "APPROVED":
+            if review.review_status != "APPROVED" and payload.get("diagnostic") is not True:
                 return self.not_run(digest, "review must be APPROVED before testing")
             if self.executor is None:
                 return self.not_run(digest, "sandbox executor is not configured")

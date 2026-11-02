@@ -137,9 +137,11 @@ def code_digest(code: CoderArtifacts) -> str:
 class ReviewIssue(Contract):
     file: StrictStr | None = None
     line: Annotated[StrictInt, Field(ge=1)] | None = None
-    severity: Literal["INFO", "WARNING", "ERROR", "CRITICAL"]
+    severity: Literal["NIT", "INFO", "WARNING", "ERROR", "CRITICAL", "BLOCKER"]
     message: Text
     suggestion: Text
+    blocker_type: Literal["BUILD_RUNTIME", "API_CONTRACT", "SECURITY"] | None = None
+    blocker_evidence: Text | None = None
 
     @model_validator(mode="after")
     def location(self):
@@ -170,9 +172,23 @@ class ReviewDecision(Contract):
         if self.review_status == "REJECTED" and (not self.issues or not self.correction_directives):
             raise ValueError("REJECTED requires issues and correction directives")
         if self.review_status == "APPROVED" and (self.correction_directives or any(
-            issue.severity in ("ERROR", "CRITICAL") for issue in self.issues
+            issue.severity in ("ERROR", "CRITICAL", "BLOCKER") for issue in self.issues
         )):
             raise ValueError("APPROVED cannot contain blocking issues or correction directives")
+        for issue in self.issues:
+            if issue.severity in ("ERROR", "CRITICAL", "BLOCKER"):
+                if issue.blocker_type is None or issue.blocker_evidence is None:
+                    issue.severity = "WARNING"
+                    issue.blocker_type = None
+                    issue.blocker_evidence = None
+                else:
+                    issue.severity = "BLOCKER"
+            else:
+                issue.blocker_type = None
+                issue.blocker_evidence = None
+        if not any(issue.severity == "BLOCKER" for issue in self.issues):
+            object.__setattr__(self, "review_status", "APPROVED")
+            object.__setattr__(self, "correction_directives", [])
         return self
 
 

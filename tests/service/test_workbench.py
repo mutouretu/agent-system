@@ -115,6 +115,40 @@ def test_repository_run_requires_git_delivery_before_completion(client):
     assert result['status'] == 'COMPLETED' and result['summary']['delivery']['commit'] == 'a' * 40
 
 
+def test_new_repair_cycle_reuses_latest_valid_code_and_review(client):
+    from rd_platform.agents.dev.schemas import CoderArtifacts, ReviewerArtifacts, code_digest
+    run = submit(client, workspace_mode='repository')
+    code = CoderArtifacts(files={'src/rd_platform/feature.py': 'VALUE = 1\n'},
+                          tests={'tests/unit/test_feature.py': 'def test_feature(): assert True\n'},
+                          commit_message='feature')
+    review = ReviewerArtifacts(review_status='REJECTED', code_digest=code_digest(code),
+        issues=[{'file': 'src/rd_platform/feature.py', 'severity': 'ERROR', 'message': 'fix', 'suggestion': 'fix',
+                 'blocker_type': 'API_CONTRACT', 'blocker_evidence': 'required contract is absent'}],
+        correction_directives=[{'file': 'src/rd_platform/feature.py', 'instruction': 'fix'}])
+    architecture = {'architecture_spec': {'modules': [{'name': 'feature', 'responsibility': 'feature'}],
+        'data_flow': ['request -> result']}, 'api_contracts': {'feature': {'type': 'object'}},
+        'subtasks': [{'id': 'feature', 'description': 'build', 'acceptance_criteria': ['works']}]}
+    tasks = [
+        {'id': 'architect', 'capability': 'architecture', 'status': 'COMPLETED', 'output': architecture},
+        {'id': 'coder-03', 'capability': 'coding', 'status': 'COMPLETED', 'output': code.model_dump()},
+        {'id': 'reviewer-03', 'capability': 'review', 'status': 'COMPLETED', 'output': review.model_dump()},
+        {'id': 'tester-03', 'capability': 'testing', 'status': 'BLOCKED', 'output': None},
+    ]
+    store = client.app.state.run_store
+    with store.transaction() as db:
+        db.execute(runs.update().where(runs.c.id == run['id']).values(status='FAILED', tasks=tasks))
+    response = client.post(f"/v1/runs/{run['id']}/resume", json={'new_cycle': True})
+    assert response.status_code == 202, response.text
+    child = response.json()
+    assert child['summary']['resume_from_task'] == 'tester-00'
+    assert child['summary']['source_coder_task'] == 'coder-03'
+    with store.transaction() as db:
+        queued = db.execute(select(runs.c.summary).where(runs.c.id == child['id'])).scalar_one()
+    assert [task['id'] for task in queued['resume_seed']['tasks']] == [
+        'architect', 'coder-00', 'reviewer-00']
+    assert child['summary']['workspace_mode'] == 'repository'
+
+
 def test_project_details_keep_context_and_scope_run_history(client):
     project = client.post("/v1/projects", json={
         "name": "Project details", "context": {"description": "Build a cache"},

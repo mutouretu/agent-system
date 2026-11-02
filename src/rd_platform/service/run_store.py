@@ -164,7 +164,7 @@ class RunStore:
             self.event(db, record["id"], "run_queued", {"status": "QUEUED", "backend": backend})
         return self.get_run(record["id"])
 
-    def resume_run(self, parent_id, task_id=None):
+    def resume_run(self, parent_id, task_id=None, *, new_cycle=False):
         """Queue a child run at a selected role checkpoint, replaying earlier evidence."""
         now = time.time()
         with self.transaction() as db:
@@ -176,12 +176,31 @@ class RunStore:
             tasks = parent['tasks']
             if not tasks:
                 raise StoreConflict('此运行没有可恢复的角色检查点')
-            selected = task_id or next((task['id'] for task in reversed(tasks)
-                                        if task['status'] in ('FAILED', 'BLOCKED')), None)
-            indices = [index for index, task in enumerate(tasks) if task['id'] == selected]
-            if len(indices) != 1:
-                raise StoreConflict('所选角色节点不属于此运行')
-            prefix = tasks[:indices[0]]
+            if new_cycle:
+                if task_id is not None:
+                    raise StoreConflict('新修复轮次会自动从最近的有效产物开始')
+                architect = next((task for task in tasks if task['id'] == 'architect' and task['status'] == 'COMPLETED'), None)
+                coder = next((task for task in reversed(tasks)
+                              if task['capability'] == 'coding' and task['status'] == 'COMPLETED'), None)
+                if architect is None or coder is None:
+                    raise StoreConflict('缺少可复用的架构或代码产物')
+                suffix = coder['id'].removeprefix('coder-')
+                reviewer = next((task for task in tasks if task['id'] == f'reviewer-{suffix}' and
+                                 task['status'] == 'COMPLETED'), None)
+                prefix = [{**architect}, {**coder, 'id': 'coder-00', 'depends_on': ['architect']}]
+                if reviewer is not None:
+                    prefix.append({**reviewer, 'id': 'reviewer-00',
+                                   'depends_on': ['architect', 'coder-00']})
+                    selected = 'tester-00'
+                else:
+                    selected = 'reviewer-00'
+            else:
+                selected = task_id or next((task['id'] for task in reversed(tasks)
+                                            if task['status'] in ('FAILED', 'BLOCKED')), None)
+                indices = [index for index, task in enumerate(tasks) if task['id'] == selected]
+                if len(indices) != 1:
+                    raise StoreConflict('所选角色节点不属于此运行')
+                prefix = tasks[:indices[0]]
             from rd_platform.agents.dev.schemas import ArchitectArtifacts, CoderArtifacts, ReviewerArtifacts, TesterArtifacts
             from pydantic import ValidationError
             try:
@@ -215,6 +234,9 @@ class RunStore:
                     raise StoreConflict('缺少项目 Agent 配置，无法恢复')
             summary = {'parent_run_id': parent_id, 'resume_from_task': selected,
                        'resume_seed': {'parent_run_id': parent_id, 'target_task_id': selected, 'tasks': checked}}
+            if new_cycle:
+                summary['new_cycle'] = True
+                summary['source_coder_task'] = coder['id']
             summary['workspace_mode'] = parent['summary'].get('workspace_mode', 'isolated')
             if snapshot:
                 summary['agent_config'] = snapshot
