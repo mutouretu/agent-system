@@ -17,6 +17,17 @@ def test_service_module_exports_asgi_app():
     assert app is not None
 
 
+def test_dashboard_keeps_existing_workspace_controls(service):
+    client, _ = service
+    page = client.get('/')
+    assert page.status_code == 200
+    for element_id in ('project-count', 'stat-passed', 'projects', 'new-project',
+                       'nav-project-group', 'nav-workspace', 'workspace-execution',
+                       'workspace-form', 'agent-config-dialog'):
+        assert f'id="{element_id}"' in page.text
+    assert 'href="/agents"' not in page.text
+
+
 @pytest.fixture
 def service(tmp_path):
     settings = Settings(*(tmp_path / name for name in ("data", "logs", "models")))

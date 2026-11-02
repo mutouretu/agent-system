@@ -23,18 +23,8 @@ from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher, cre
 from .run_store import RunStore, StoreConflict
 from .workbench import install_workbench, worker_token
 from .requirements import install_requirements
-from .page_routes import install_agent_page
 
 MAX_BYTES = 1024 * 1024
-
-
-def _safe_config_error(error: Exception) -> str:
-    """Produce a non-leaking validation message; never echo stored secret values."""
-
-    text = str(error)
-    # Drop anything that looks like a credential assignment to avoid echoing input.
-    text = re.sub(r"api[_-]?key\s*[:=]\s*\S+", "api_key: <hidden>", text, flags=re.IGNORECASE)
-    return text[:512] or "agent config is invalid"
 
 
 @dataclass(frozen=True)
@@ -190,13 +180,12 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             return JSONResponse({"detail": "cross-origin mutation is not allowed"}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        if request.url.path == "/" or request.url.path.startswith("/assets/") or request.url.path == "/agents":
+        if request.url.path == "/" or request.url.path.startswith("/assets/"):
             response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
         return response
 
     install_workbench(app)
     install_requirements(app)
-    install_agent_page(app)
 
     @app.get("/v1/projects")
     async def list_projects():
@@ -230,7 +219,7 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
         except ValueError as error:
             if isinstance(error, StoreConflict):
                 raise HTTPException(409, str(error)) from None
-            raise HTTPException(422, _safe_config_error(error)) from None
+            raise HTTPException(422, str(error)) from None
         except KeyError:
             raise HTTPException(404, "project not found") from None
 
