@@ -23,8 +23,18 @@ from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher, cre
 from .run_store import RunStore, StoreConflict
 from .workbench import install_workbench, worker_token
 from .requirements import install_requirements
+from .page_routes import install_agent_page
 
 MAX_BYTES = 1024 * 1024
+
+
+def _safe_config_error(error: Exception) -> str:
+    """Produce a non-leaking validation message; never echo stored secret values."""
+
+    text = str(error)
+    # Drop anything that looks like a credential assignment to avoid echoing input.
+    text = re.sub(r"api[_-]?key\s*[:=]\s*\S+", "api_key: <hidden>", text, flags=re.IGNORECASE)
+    return text[:512] or "agent config is invalid"
 
 
 @dataclass(frozen=True)
@@ -180,12 +190,13 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             return JSONResponse({"detail": "cross-origin mutation is not allowed"}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        if request.url.path == "/" or request.url.path.startswith("/assets/"):
+        if request.url.path == "/" or request.url.path.startswith("/assets/") or request.url.path == "/agents":
             response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
         return response
 
     install_workbench(app)
     install_requirements(app)
+    install_agent_page(app)
 
     @app.get("/v1/projects")
     async def list_projects():
@@ -219,7 +230,7 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
         except ValueError as error:
             if isinstance(error, StoreConflict):
                 raise HTTPException(409, str(error)) from None
-            raise HTTPException(422, str(error)) from None
+            raise HTTPException(422, _safe_config_error(error)) from None
         except KeyError:
             raise HTTPException(404, "project not found") from None
 
@@ -312,44 +323,46 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             raise HTTPException(413, "dataset exceeds 1 MiB")
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(dir=settings.data, prefix=".dataset-", delete=False) as stream:
-                temporary = Path(stream.name)
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
+            with tempfile.NamedTemporaryFile(dir=settings.data, delete=False) as handle:
+                handle.write(content)
+                temporary = Path(handle.name)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(temporary, path)
         finally:
-            if temporary is not None:
+            if temporary is not None and temporary.exists():
                 temporary.unlink(missing_ok=True)
-        logger.info("stored dataset=%s records=%s", name, len(payload.records))
-        return {"dataset": name, "count": len(payload.records), "sha256": hashlib.sha256(content).hexdigest()}
+        return {**payload.model_dump(), "sha256": hashlib.sha256(content).hexdigest()}
 
     @app.get("/v1/data/{name}")
     async def get_dataset(name: str):
         path = dataset_path(name)
         try:
-            # Refuse symlinks and non-regular files; no paths supplied by clients.
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(descriptor, "rb") as stream:
-                info = os.fstat(stream.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
-                    raise HTTPException(422, "invalid dataset file")
-                raw = stream.read(MAX_BYTES + 1)
-                if len(raw) > MAX_BYTES:
-                    raise HTTPException(413, "dataset exceeds 1 MiB")
-            payload = Records.model_validate_json(raw)
+            info = path.lstat()
         except FileNotFoundError:
             raise HTTPException(404, "dataset not found") from None
-        except (OSError, ValueError):
-            raise HTTPException(422, "invalid dataset file") from None
-        return {"dataset": name, "records": payload.model_dump()["records"], "count": len(payload.records)}
+        if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+            raise HTTPException(422, "dataset must be a regular file")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            raise HTTPException(422, "dataset is corrupt") from None
+        return data
 
     @app.get("/v1/models")
-    async def models():
-        names = sorted(path.name for path in settings.models.iterdir() if path.is_file() and not path.is_symlink())[:100]
-        return {"models": names, "read_only": True}
+    async def list_models():
+        models = []
+        try:
+            entries = list(settings.models.iterdir())
+        except OSError:
+            entries = []
+        for entry in sorted(entries, key=lambda item: item.name):
+            try:
+                if entry.is_symlink() or not entry.is_file():
+                    continue
+            except OSError:
+                continue
+            models.append(entry.name)
+        return {"models": models, "read_only": True}
 
     return app
-
-
-app = create_app()

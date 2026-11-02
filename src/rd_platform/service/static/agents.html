@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent 管理 · 研发平台</title>
+  <link rel="stylesheet" href="/assets/agents.css">
+</head>
+<body>
+  <aside class="sidebar" aria-label="主导航">
+    <div class="brand">研发平台</div>
+    <nav>
+      <a href="/" class="nav-link">项目列表</a>
+      <a href="/#development" class="nav-link">项目开发</a>
+      <a href="/agents" class="nav-link active" aria-current="page">Agent 管理</a>
+    </nav>
+  </aside>
+  <main class="content">
+    <header class="page-header">
+      <h1>Agent 配置管理</h1>
+      <p class="hint">查看并编辑四个角色的 backend、model 与 responsibility。TESTER 固定使用 Docker 沙箱执行。</p>
+    </header>
+
+    <section class="toolbar" aria-label="项目选择">
+      <label for="project-select">项目</label>
+      <select id="project-select" aria-describedby="project-help"></select>
+      <button type="button" id="projects-retry" class="secondary hidden">重试加载项目</button>
+      <button type="button" id="reload" disabled>重新加载</button>
+      <button type="button" id="save" disabled>保存配置</button>
+      <span id="project-help" class="hint">选择项目后加载四个角色的配置。</span>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <p id="error" class="error hidden" role="alert"></p>
+
+    <form id="agent-form" class="agent-form" novalidate hidden>
+      <div id="roles" class="roles"></div>
+    </form>
+
+    <p id="empty" class="empty hidden">还没有项目。请先在控制台创建项目后再配置 Agent。</p>
+  </main>
+  <script src="/assets/agents.js"></script>
+</body>
+</html>

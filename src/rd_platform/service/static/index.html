@@ -1,63 +1,70 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>RD Platform · 研发管理控制台</title><link rel="stylesheet" href="/assets/app.css"><script src="/assets/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>研发平台 · 研发管理控制台</title><link rel="stylesheet" href="/assets/app.css"></head>
 <body>
 <aside class="sidebar">
-  <a class="brand" href="/"><span class="brand-icon">RD</span><span>研发管理平台<small>OPERATIONS CONSOLE</small></span></a>
-  <div class="workspace-label">资源管理</div>
-  <nav aria-label="项目导航">
-    <button class="nav-item nav-group" id="nav-project-group" aria-expanded="true" aria-controls="project-subnav"><span>▦</span> 项目管理 <span class="nav-chevron" aria-hidden="true">⌄</span></button>
-    <div id="project-subnav" class="subnav">
-      <button class="nav-item active" id="nav-projects" aria-current="page">项目列表 <span class="nav-count" id="project-count">0</span></button>
-      <button class="nav-item" id="nav-requirements">需求管理</button>
-      <button class="nav-item" id="nav-workspace">项目开发</button>
-    </div>
+  <div class="brand">研发管理控制台</div>
+  <nav>
+    <a href="/" id="nav-projects">项目列表</a>
+    <a href="/#development" id="nav-requirements">项目开发</a>
+    <a href="/agents" id="nav-agents" class="fixed">Agent 管理</a>
   </nav>
-  <a class="nav-item" href="/docs" target="_blank" rel="noopener"><span>⌘</span> API 文档 <span class="external">↗</span></a>
-  <div class="sidebar-bottom"><div class="local-mark">LOCAL ENVIRONMENT</div><p>本地研发环境<br><span>Docker 隔离执行</span></p><div class="version">rd_platform <span>v0.3.0</span></div></div>
 </aside>
 <main>
-  <header class="topbar"><div class="breadcrumb">控制台 <span>/</span> <strong id="breadcrumb-current">项目管理</strong></div><div class="connection"><span class="environment">LOCAL</span><span id="worker-dot" class="dot"></span><span id="worker-label">连接中</span></div></header>
-  <div id="notice" class="notice hidden" role="alert"></div>
-  <section id="overview" class="view">
-    <div class="page-heading"><div><div class="eyebrow">DELIVERY OVERVIEW</div><h1>项目交付控制台</h1><p>从业务目标到需求交付，跟踪每个项目的里程碑与进度。</p></div><button class="primary" id="new-project">＋ 新建研发项目</button></div>
-    <div class="stats delivery-stats"><article><span>进行中研发项目</span><strong id="stat-projects">—</strong><small id="stat-running">—</small></article><article><span>需求包交付完成度</span><strong id="stat-passed">—</strong><small id="packages-summary">—</small></article><article><span>平均交付周期</span><strong id="delivery-cycle">—</strong><small>已交付需求包</small></article><article><span>待审核项目</span><strong id="stat-failed">—</strong><small>等待业务交付确认</small></article></div>
-    <div class="dashboard-search"><label for="project-search">搜索项目</label><input type="search" id="project-search" placeholder="按 Project ID、需求名称或业务目标搜索" autocomplete="off"><select id="project-filter" aria-label="项目列表范围"><option value="active">当前项目</option><option value="archived">已归档</option><option value="deleted">回收站</option></select><span id="search-result-count" class="muted" aria-live="polite"></span></div>
-    <p class="field-note">前端管理预览：编辑、归档与删除仅保存于此浏览器。删除移入本地回收站，可恢复；不会删除服务器项目或停止正在执行的任务。</p><p id="project-operation-result" role="status" class="field-note"></p>
-    <section class="project-panel" aria-labelledby="project-list-title"><div class="section-heading"><h2 id="project-list-title">项目列表 <span id="list-count"></span></h2><button class="secondary" id="refresh">↻ 刷新</button></div>
-    <div class="table-scroll"><table class="project-table delivery-table"><thead><tr><th scope="col">项目 / 业务目标</th><th scope="col">当前里程碑</th><th scope="col">需求包完成度</th><th scope="col">交付状态</th><th scope="col">全局耗时 / Backend</th><th scope="col">操作</th></tr></thead><tbody id="projects"></tbody></table></div>
-    <div id="empty" class="empty hidden"><h2>暂无项目</h2><p>创建研发任务，启动架构、开发、审查与沙箱验证流程。</p><button class="primary" id="empty-create">创建项目</button></div></section>
-    <p id="search-empty" class="panel-empty hidden">没有匹配的项目，请调整搜索条件。</p>
-    <div class="delivery-footer" id="delivery-footer"></div>
-    <p class="field-note">完成度以已登记的交付确认为准；缺失数据待补充。耗时暂按最近 200 次运行汇总，待后端对齐全量口径。</p>
+  <section id="overview">
+    <h1>项目总览</h1>
+    <div class="dashboard-search"><input id="project-search" type="search" placeholder="搜索项目"><select id="project-filter"><option value="active">活跃</option><option value="archived">归档</option><option value="deleted">回收站</option></select><span id="search-result-count"></span></div>
+    <div class="delivery-stats"><span id="project-count"></span><span id="stat-projects"></span><span id="stat-running"></span><span id="delivery-percent"></span><span id="packages-summary"></span><span id="delivery-cycle"></span><span id="stat-failed"></span><span id="delivery-footer"></span></div>
+    <p id="notice" class="hidden"></p>
+    <button id="create-project">+ 新建项目</button>
+    <p id="project-operation-result"></p>
+    <p id="search-empty" class="hidden"></p>
+    <p id="empty" class="hidden">还没有项目，先新建一个吧。</p>
+    <span id="list-count"></span>
+    <table><thead><tr><th>项目</th><th>里程碑</th><th>交付进度</th><th>状态</th><th>耗时</th><th>操作</th></tr></thead><tbody id="projects"></tbody></table>
   </section>
-  <section id="project-detail" class="view hidden">
-    <div class="development-picker"><div><div class="eyebrow">PROJECT DEVELOPMENT</div><h2>项目开发</h2></div><label>选择项目<select id="development-project" aria-label="选择开发项目"></select></label></div>
-    <p id="development-empty" class="panel-empty hidden">暂无可开发的项目，请先在项目列表中新建项目。</p>
-    <button class="back quiet" id="project-back">← 返回项目列表</button>
-    <div class="page-heading"><div><div class="eyebrow">PROJECT WORKSPACE</div><h1 id="project-title"></h1><p id="project-id" class="mono"></p></div><button class="primary" id="project-start">＋ 编写研发需求</button></div>
-    <div class="project-summary"><article><span>已定义任务</span><strong id="project-task-count">—</strong></article><article><span>近期运行</span><strong id="project-run-count">—</strong></article><article><span>最近运行状态</span><div id="project-latest-status"></div></article><article><span>最近测试结果</span><strong id="project-test-result">—</strong></article></div>
-    <div class="workspace-toolbar"><span>研发协作</span><label>执行记录<select id="workspace-history" aria-label="切换执行记录"></select></label><button class="secondary" id="project-refresh">↻ 刷新</button></div>
-    <div class="workspace-grid"><section class="collaboration-panel"><div class="section-heading"><h2>团队协作时间线</h2><span class="muted">真实阶段事件 · 非内部思维过程</span></div><div id="conversation" class="conversation"></div><form id="workspace-form" class="composer"><label for="workspace-requirements">交给研发团队的任务</label><textarea id="workspace-requirements" rows="4" maxlength="16000" required placeholder="描述要开发的功能、输入输出与验收标准…"></textarea><div class="composer-options"><label>模型后端<select id="workspace-backend"><option value="configured">项目 Agent 配置</option><option value="mixed">Codex 架构 + DeepSeek 编码审查</option><option value="codex">Codex · 订阅</option><option value="llm">LLM API</option></select></label><label>最多修订<select id="workspace-retries"><option value="3">3 次</option><option value="2">2 次</option><option value="1">1 次</option><option value="0">0 次</option></select></label><button type="button" class="quiet" id="workspace-example">填入 LRU 示例</button><button class="primary" id="workspace-submit" type="submit">启动团队研发 →</button></div><p class="field-note" id="workspace-note">每次提交创建独立研发任务；本版不会自动继承上轮代码。支持 Python 标准库任务。</p><p id="workspace-error" class="field-error" role="alert"></p></form></section><aside class="team-panel"><h2>Agent 团队 <span class="live-indicator">4 ROLES</span></h2><p class="field-note">点击角色查看交付物</p><div id="team-agents"></div><div class="team-contract">ARCHITECT → CODER → REVIEWER → TESTER<br>审查与测试反馈驱动本次运行内的修订。</div></aside></div>
-    <section class="project-panel agent-management-panel" id="agent-management"><div class="section-heading"><div><h2>Agent 管理</h2><p class="field-note">为当前项目配置角色模型和职责；保存后用于下一次团队研发运行。</p></div><button class="secondary" id="agent-config-edit">编辑角色配置</button></div><div id="agent-config-cards" class="agent-config-grid"></div><p id="agent-config-message" class="field-note" role="status"></p></section>
+  <section id="requirement-studio" class="hidden"><h1>需求工作台</h1></section>
+  <section id="project-detail" class="hidden">
+    <header class="detail-header"><span id="breadcrumb-current"></span></header>
+    <div class="workspace-toolbar"><label for="development-project">项目</label><select id="development-project"></select></div>
+    <p id="development-empty" class="hidden">请选择或创建一个项目进入开发。</p>
     <div id="workspace-execution"></div>
-    <section class="project-panel project-section"><div class="section-heading"><h2>项目任务</h2><span class="muted">项目定义的任务与依赖</span></div><div class="table-scroll"><table class="project-table"><thead><tr><th scope="col">任务</th><th scope="col">能力</th><th scope="col">状态</th><th scope="col">依赖</th><th scope="col">输入 / 输出</th></tr></thead><tbody id="project-tasks"></tbody></table></div><p id="project-tasks-empty" class="panel-empty hidden">暂无预定义任务。研发团队生成的角色任务请在运行详情中查看。</p></section>
-    <section class="project-panel project-section"><div class="section-heading"><h2>运行历史</h2><span class="muted">本项目最近 200 次运行</span></div><div class="table-scroll"><table class="project-table"><thead><tr><th scope="col">运行 / 模板</th><th scope="col">最近运行状态</th><th scope="col">模型后端</th><th scope="col">测试通过</th><th scope="col">创建时间</th><th scope="col">操作</th></tr></thead><tbody id="project-runs"></tbody></table></div><p id="project-runs-empty" class="panel-empty hidden">此项目尚无研发运行，可通过右上角按钮启动任务。</p></section>
+    <div id="detail"></div>
   </section>
-  <section id="detail" class="view hidden">
-    <button class="back quiet" id="back">← 返回项目</button>
-    <div class="page-heading detail-heading"><div><div class="eyebrow" id="run-short">RUN</div><h1 id="detail-title">研发运行</h1><p id="detail-subtitle"></p></div><div class="heading-actions"><span id="run-status" class="badge"></span><select class="hidden" id="resume-node" aria-label="选择恢复节点"></select><button class="secondary hidden" id="resume-review">从所选节点继续 ↗</button><button class="secondary" id="rerun">重新运行 ↗</button></div></div>
-    <div class="run-meta"><span id="run-backend"></span><span id="run-time"></span><span id="run-tests"></span><span id="event-status">实时事件连接中</span></div>
-    <div id="run-error" class="error-panel hidden"></div>
-    <section class="flow-panel"><div class="section-heading"><h2>团队工作流</h2><span id="iteration-label" class="muted">等待领取</span></div><div id="flow" class="flow"></div><div class="flow-note"><span class="dot green"></span> 测试仅在隔离 Docker 内执行 <span id="acceptance-label"></span></div></section>
-    <div class="detail-grid"><section class="artifact-panel"><div class="tabs" role="tablist"><button class="tab active" data-tab="artifacts">产物与代码</button><button class="tab" data-tab="logs">运行日志</button><button class="tab" data-tab="requirements">需求说明</button><button class="quiet download" id="download">↓ 导出记录</button></div><div id="tab-artifacts" class="tab-content"><div id="artifact-files" class="artifact-files"></div><div class="code-wrap"><div id="code-title" class="code-title">等待产物</div><pre id="code-content">团队完成角色任务后，产物将在这里展示。</pre></div></div><div id="tab-logs" class="tab-content hidden"><pre id="log-content">等待运行日志…</pre></div><div id="tab-requirements" class="tab-content hidden"><pre id="requirements-content"></pre></div></section><aside class="timeline-panel"><h2>执行动态 <span class="live-indicator">EVENTS</span></h2><ol id="timeline"></ol></aside></div>
-  </section>
-  <footer>RD PLATFORM / OPERATIONS CONSOLE <span>本地环境 · 研发任务与执行证据管理</span></footer>
 </main>
-<dialog id="project-edit-dialog"><form id="project-edit-form"><div class="dialog-header"><div><div class="eyebrow">EDIT PROJECT</div><h2>编辑项目</h2></div><button type="button" class="close" id="project-edit-close" aria-label="关闭编辑">×</button></div><label>项目名称<input id="project-edit-name" required maxlength="256"></label><label>业务目标<textarea id="project-edit-objective" rows="4" maxlength="16000"></textarea></label><label>当前里程碑<input id="project-edit-milestone" maxlength="128"></label><p class="field-note">仅修改本浏览器中的展示信息，不改变运行中的需求或服务器数据。</p><p id="project-edit-error" class="field-error" role="alert"></p><div class="dialog-footer"><button type="button" class="secondary" id="project-edit-cancel">取消</button><button class="primary">保存修改</button></div></form></dialog>
-<dialog id="project-delete-dialog"><form id="project-delete-form"><div class="dialog-header"><h2>删除项目</h2><button type="button" class="close" id="project-delete-close" aria-label="关闭删除确认">×</button></div><p id="project-delete-description"></p><p class="field-note">项目将从当前浏览器列表移入回收站，可随时恢复。服务器数据和正在执行的任务不受影响。</p><p id="project-delete-error" class="field-error" role="alert"></p><div class="dialog-footer"><button type="button" class="secondary" id="project-delete-cancel">取消</button><button class="danger-button">确认移入回收站</button></div></form></dialog>
-<dialog id="delivery-dialog"><form id="delivery-form"><div class="dialog-header"><div><div class="eyebrow">NEW R&D PROJECT</div><h2>新建研发项目</h2></div><button type="button" class="close" id="delivery-close" aria-label="关闭新建项目">×</button></div><label>项目 / 需求名称<input id="delivery-name" required maxlength="256" placeholder="例如：LRUCache 缓存引擎"></label><label>核心业务目标与验收要求<textarea id="delivery-requirements" required maxlength="16000" rows="5" placeholder="描述业务目标、功能范围及验收标准"></textarea></label><div class="form-row"><label>首个里程碑<input id="delivery-milestone" required maxlength="128" value="M1: 业务需求交付"></label><label>Backend 模式<select id="delivery-backend"><option value="cli">CLI 订阅</option><option value="llm">LLM API</option></select></label></div><p class="field-note">保存首个需求包，进入项目后启动研发。当前执行范围为 Python 标准库任务。</p><p id="delivery-error" class="field-error" role="alert"></p><div class="dialog-footer"><span>交付确认与自动化验证分别记录。</span><button class="primary" id="delivery-submit">创建并进入项目 →</button></div></form></dialog>
-<dialog id="create-dialog"><form id="create-form"><div class="dialog-header"><div><div class="eyebrow">TASK CONFIGURATION</div><h2>启动研发任务</h2></div><button type="button" class="close" id="close-dialog" aria-label="关闭">×</button></div><label>项目名称<input id="project-name" required maxlength="120" placeholder="例如：我的第一个研发项目"></label><div class="template-options"><button type="button" class="template selected" data-template="lru"><strong>LRU Cache 示例 <span>推荐</span></strong><small>内置固定验收 · 体验完整流程</small></button><button type="button" class="template" data-template="custom"><strong>自定义 Python 任务</strong><small>标准库范围 · 验证生成的测试</small></button></div><label>需求说明<textarea id="requirements" rows="6" required maxlength="16000"></textarea></label><p id="template-note" class="field-note">示例使用固定需求契约与独立验收测试。</p><div class="form-row"><label>模型后端<select id="backend"><option value="codex">Codex · ChatGPT 订阅</option><option value="llm">LLM API · 服务端配置</option></select></label><label>最多修订次数<select id="max-retries"><option value="3">3 次</option><option value="2">2 次</option><option value="1">1 次</option><option value="0">不修订</option></select></label></div><div id="form-error" class="field-error" role="alert"></div><div class="dialog-footer"><span>模型生成产物，Docker 验证结果。</span><button type="submit" class="primary" id="submit-run">启动研发 →</button></div></form></dialog>
-<dialog id="agent-config-dialog"><form id="agent-config-form"><div class="dialog-header"><div><div class="eyebrow">PROJECT AGENTS</div><h2>Agent 管理</h2></div><button type="button" class="close" id="agent-config-close" aria-label="关闭 Agent 配置">×</button></div><div id="agent-config-fields" class="agent-config-fields"></div><p class="field-note">模型 API Key 由本地 Worker 配置提供，此处不会保存密钥。Tester 固定通过 Docker 沙箱执行，无独立模型调用。</p><p id="agent-config-error" class="field-error" role="alert"></p><div class="dialog-footer"><button type="button" class="secondary" id="agent-config-cancel">取消</button><button class="primary" type="submit">保存角色配置</button></div></form></dialog>
-<script src="/assets/studio.js" defer></script><script src="/assets/agent_config.js" defer></script>
+<dialog id="create-dialog">
+  <form id="create-form">
+    <h2>新建项目</h2>
+    <label>项目名称<input id="project-name" required></label>
+    <label>需求<textarea id="requirements"></textarea></label>
+    <label>执行后端<select id="backend"><option value="codex">Codex</option><option value="llm">LLM API</option><option value="configured">项目 Agent 配置</option></select></label>
+    <label>最大重试<input id="max-retries" type="number" value="3"></label>
+    <p id="template-note"></p>
+    <p id="form-error" class="error"></p>
+    <button id="submit-run" type="submit">创建</button>
+    <button type="button" id="create-close">取消</button>
+  </form>
+</dialog>
+<dialog id="project-edit-dialog">
+  <form id="project-edit-form">
+    <h2>编辑项目</h2>
+    <label>名称<input id="project-edit-name"></label>
+    <label>目标<input id="project-edit-objective"></label>
+    <label>里程碑<input id="project-edit-milestone"></label>
+    <p id="project-edit-error" class="error"></p>
+    <button type="submit" id="project-edit-save">保存</button>
+    <button type="button" id="project-edit-cancel">取消</button>
+    <button type="button" id="project-edit-close">关闭</button>
+  </form>
+</dialog>
+<dialog id="project-delete-dialog">
+  <form id="project-delete-form">
+    <p id="project-delete-description"></p>
+    <p id="project-delete-error" class="error"></p>
+    <button type="submit" id="project-delete-confirm">删除</button>
+    <button type="button" id="project-delete-cancel">取消</button>
+    <button type="button" id="project-delete-close">关闭</button>
+  </form>
+</dialog>
+<script src="/assets/app.js" defer></script><script src="/assets/studio.js" defer></script><script src="/assets/agent_config.js" defer></script>
 </body></html>
