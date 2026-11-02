@@ -29,6 +29,8 @@ def check_ports(client):
         if port in owned:
             continue
         with socket.socket() as listener:
+            # A recently stopped Compose service can leave TIME_WAIT sockets behind.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 listener.bind(("127.0.0.1", port))
             except OSError as exc:
