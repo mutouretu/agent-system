@@ -220,6 +220,26 @@ def test_reviewer_repairs_one_structural_json_error_without_weakening_contract()
     assert backend.calls[1].input_data['format_feedback'][0]['path'].endswith('suggestion')
 
 
+def test_reviewer_repairs_unknown_file_reference_before_dispatch():
+    class RepairGenerator:
+        def __init__(self):
+            self.calls = []
+
+        async def generate(self, request):
+            self.calls.append(request)
+            if len(self.calls) == 1:
+                broken = rejected()
+                broken['issues'][0]['file'] = 'src/missing.py'
+                return broken
+            return rejected()
+
+    generator = RepairGenerator()
+    result = run(dev.ReviewerAgent(generator), {'architecture': architecture(), 'code': code()})
+    assert result.status == AgentStatus.COMPLETED
+    assert len(generator.calls) == 2
+    assert generator.calls[1].input_data['format_feedback'][0]['type'] == 'semantic_error'
+
+
 def test_reviewer_format_repair_is_bounded_and_never_forges_approval():
     class AlwaysMalformed:
         def __init__(self): self.calls=[]

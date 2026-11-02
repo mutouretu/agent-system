@@ -59,7 +59,7 @@ class GeneratingAgent(BaseAgent):
     def unavailable(self):
         return AgentOutput(status=AgentStatus.BLOCKED, error="artifact generator is not configured")
 
-    async def generate(self, data, schema, *, repair_format=False):
+    async def generate(self, data, schema, *, repair_format=False, validator=None):
         prompt = GenerationRequest(role=self.metadata.role, system_prompt=PROMPTS[self.metadata.role],
                                    input_data=json_object(data), output_schema=schema.model_json_schema())
         try:
@@ -69,18 +69,27 @@ class GeneratingAgent(BaseAgent):
                 if not isinstance(result, dict):
                     raise ValueError("generator must return a JSON object, not prose or a code fence")
                 try:
-                    return schema.model_validate(json_object(result))
-                except ValidationError as error:
+                    artifact = schema.model_validate(json_object(result))
+                    if validator is not None:
+                        validator(artifact)
+                    return artifact
+                except (ValidationError, ValueError) as error:
                     if attempt >= (2 if repair_format else 0):
                         raise
                     # Return precise, bounded schema errors and the previous
                     # review as data. The final result must still pass the
                     # original strict schema; no fabricated defaults are used.
-                    feedback = [{"path": ".".join(map(str, item["loc"]))[:180],
-                                 "type": item["type"], "message": item["msg"][:180]}
-                                for item in error.errors(include_input=False)[:20]]
+                    feedback = ([{"path": ".".join(map(str, item["loc"]))[:180],
+                                  "type": item["type"], "message": item["msg"][:180]}
+                                 for item in error.errors(include_input=False)[:20]]
+                                if isinstance(error, ValidationError) else
+                                [{"path": "artifact", "type": "semantic_error", "message": str(error)[:180]}])
+                    role_hint = ("Preserve substantive review findings and use only paths present in the supplied code. "
+                                 if self.metadata.role.value == 'REVIEWER' else
+                                 "Preserve working source, add missing required fields and real tests. ")
                     request = prompt.model_copy(update={
-                        "system_prompt": prompt.system_prompt + "\nFORMAT REPAIR ONLY: your prior JSON failed validation. Preserve substantive review findings, correct the listed fields, and return one complete schema-compliant object without extra keys.",
+                        "system_prompt": prompt.system_prompt + "\nARTIFACT REPAIR: your prior JSON failed validation. " + role_hint +
+                                         "Correct the listed errors and return one complete schema-compliant object without extra keys.",
                         "input_data": {**prompt.input_data, "format_feedback": feedback,
                                        "previous_json_excerpt": json.dumps(result, ensure_ascii=False)[:16000]},
                     })
