@@ -42,7 +42,7 @@ class CoderAgent(GeneratingAgent):
                     raise ValueError("test evidence must contain a failed test outcome")
             if self.generator is None:
                 return self.unavailable()
-            result = await self.generate(inputs.model_dump(), CoderArtifacts)
+            result = await self.generate(inputs.model_dump(), CoderArtifacts, repair_format=True)
             return AgentOutput(artifacts=result.model_dump())
         except Exception as exc:
             return failed(exc)

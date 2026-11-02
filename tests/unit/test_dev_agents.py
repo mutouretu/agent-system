@@ -123,6 +123,22 @@ def test_coder_rejects_missing_real_tests_and_unknown_fields(caplog):
     assert "agent_artifact_rejected role=CODER" in caplog.text
 
 
+def test_coder_retries_schema_failure_with_field_feedback():
+    class RepairGenerator:
+        def __init__(self):
+            self.calls = []
+
+        async def generate(self, request):
+            self.calls.append(request)
+            return {'files': {'src/cache.py': 'class Cache: pass\n'}} if len(self.calls) == 1 else code()
+
+    generator = RepairGenerator()
+    result = run(dev.CoderAgent(generator), {'architecture': architecture()})
+    assert result.status == AgentStatus.COMPLETED
+    assert len(generator.calls) == 2
+    assert generator.calls[1].input_data['format_feedback'][0]['path'] == 'tests'
+
+
 @pytest.mark.parametrize("path", ["/tmp/pwn", "../pwn", "src/../../pwn", "src//file.py", "./file.py",
                                   "C:/file.py", "src\\file.py", ".git/config", ".ssh/id_rsa", "src/\x00.py"])
 def test_unsafe_artifact_paths_fail_before_delivery(path):
