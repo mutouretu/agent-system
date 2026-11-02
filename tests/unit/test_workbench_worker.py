@@ -25,8 +25,8 @@ def test_worker_preflight_closes_sdk_client_without_context_manager(tmp_path, mo
     worker.post = lambda path, **kwargs: calls.append((path, kwargs))
     worker.preflight()
     assert calls[:3] == ["ping", "python:3.12-slim", "close"]
-    assert worker.backends == ["codex", "prd_codex"]
-    assert calls[-1] == ("/heartbeat", {"backends": ["codex", "prd_codex"]})
+    assert worker.backends == ["codex", "configured", "prd_codex"]
+    assert calls[-1] == ("/heartbeat", {"backends": ["codex", "configured", "prd_codex"]})
 
 
 def test_worker_advertises_mixed_only_with_both_backends(tmp_path, monkeypatch):
@@ -44,7 +44,7 @@ def test_worker_advertises_mixed_only_with_both_backends(tmp_path, monkeypatch):
     worker.backends = []
     worker.post = lambda path, **kwargs: None
     worker.preflight()
-    assert worker.backends == ["codex", "llm", "mixed", "prd_codex", "prd_llm"]
+    assert worker.backends == ["codex", "llm", "mixed", "configured", "prd_codex", "prd_llm"]
 
 
 @pytest.mark.parametrize("url", ["https://example.com", "http://remote:8000", "http://user:pass@localhost:8000"])

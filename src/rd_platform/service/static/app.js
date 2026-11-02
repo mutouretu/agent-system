@@ -46,7 +46,7 @@ async function openDevelopment(push=true) {
 $('workspace-execution').append($('detail'));
 $('overview').insertBefore(document.querySelector('.dashboard-search'),document.querySelector('.delivery-stats'));
 const terminal = status => ['COMPLETED','FAILED','INTERRUPTED'].includes(status);
-const backendLabel = backend => backend === 'codex' ? 'Codex · ChatGPT 订阅' : 'LLM API';
+const backendLabel = backend => backend === 'codex' ? 'Codex · ChatGPT 订阅' : backend === 'mixed' ? 'Codex + LLM API' : backend === 'configured' ? '项目 Agent 配置' : 'LLM API';
 const stamp = seconds => new Date(seconds * 1000).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
 function node(tag, className, text) { const result = document.createElement(tag); if(className) result.className = className; if(text !== undefined) result.textContent = text; return result; }
 function notice(text) { $('notice').textContent = text; $('notice').classList.toggle('hidden', !text); }
@@ -232,11 +232,13 @@ async function openProject(id, push=true, selectedRun=null) {
   for(const key of ['project-tasks-empty','project-runs-empty']) $(key).classList.add('hidden');
   $('breadcrumb-current').textContent='项目研发空间';
   try {
-    const [project, history]=await Promise.all([api(`/v1/projects/${id}`),api(`/v1/runs?project_id=${encodeURIComponent(id)}`)]);
+    const [project, history, agentConfig]=await Promise.all([api(`/v1/projects/${id}`),api(`/v1/runs?project_id=${encodeURIComponent(id)}`),api(`/v1/projects/${id}/agents/config`)]);
     if(navigation!==state.navigation) return;
-    state.project=project; state.projectRuns=history.runs; renderProject();
+    state.project=project; state.projectRuns=history.runs; state.agentConfig=agentConfig; renderProject(); renderAgentConfig();
     if(!drafts.has(id) && typeof project.context?.requirements==='string') $('workspace-requirements').value=project.context.requirements;
     if(project.context?.preferred_backend) $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':project.context.preferred_backend;
+    if(agentConfig.revision > 0) $('workspace-backend').value='configured';
+    else if(!project.context?.preferred_backend) $('workspace-backend').value='mixed';
     const runId=selectedRun || history.runs[0]?.id;
     if(runId) await loadRun(runId); else renderWorkspace();
   } catch(error) { if(navigation===state.navigation) { $('project-title').textContent='项目加载失败'; notice(error.message); } }

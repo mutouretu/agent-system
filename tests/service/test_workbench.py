@@ -70,6 +70,42 @@ def test_project_details_keep_context_and_scope_run_history(client):
     assert detail["tasks"][0]["status"] == "PENDING"
 
 
+def test_agent_config_persists_and_configured_run_snapshots_roles(client):
+    project = client.post("/v1/projects", json={"name": "Agent project"}).json()
+    path = f"/v1/projects/{project['id']}/agents/config"
+    initial = client.get(path).json()
+    assert initial["revision"] == 0
+    assert initial["agents"]["TESTER"]["backend"] == "sandbox"
+    assert client.post("/v1/runs", json={"project_id": project["id"],
+        "requirements": "implement a function", "backend": "configured"}).status_code == 409
+    agents = initial["agents"]
+    agents["CODER"]["model"] = "deepseek-v4.1-flash"
+    saved = client.put(path, json={"revision": 0, "agents": agents})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["revision"] == 1
+    assert client.put(path, json={"revision": 0, "agents": agents}).status_code == 409
+    assert client.get(path).json() == saved.json()
+    run = client.post("/v1/runs", json={"project_id": project["id"],
+        "requirements": "implement a function", "backend": "configured"})
+    assert run.status_code == 202, run.text
+    assert run.json()["summary"]["agent_config"] == saved.json()
+    agents["CODER"]["model"] = "another-model"
+    assert client.put(path, json={"revision": 1, "agents": agents}).status_code == 200
+    assert client.get(f"/v1/runs/{run.json()['id']}").json()["summary"]["agent_config"]["agents"]["CODER"]["model"] == "deepseek-v4.1-flash"
+
+
+def test_agent_config_rejects_secrets_and_non_sandbox_tester(client):
+    project = client.post("/v1/projects", json={"name": "Agent project"}).json()
+    path = f"/v1/projects/{project['id']}/agents/config"
+    agents = client.get(path).json()["agents"]
+    agents["CODER"]["api_key"] = "do-not-store"
+    assert client.put(path, json={"revision": 0, "agents": agents}).status_code == 422
+    agents["CODER"].pop("api_key")
+    agents["TESTER"] = {"backend": "llm", "model": "some-model", "responsibility": "test"}
+    assert client.put(path, json={"revision": 0, "agents": agents}).status_code == 422
+    assert client.get(path).json()["revision"] == 0
+
+
 def test_async_submission_claim_events_artifacts_and_finish(client):
     run = submit(client)
     headers, worker_id = worker(client)

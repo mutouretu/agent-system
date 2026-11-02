@@ -7,6 +7,17 @@ import json
 import re
 
 ROLES = ("ARCHITECT", "CODER", "REVIEWER", "TESTER")
+DEFAULT_AGENTS = {
+    "ARCHITECT": {"backend": "codex", "model": "default", "responsibility": "拆解需求并定义架构与接口契约"},
+    "CODER": {"backend": "llm", "model": "deepseek-v4.1-flash", "responsibility": "实现代码与单元测试"},
+    "REVIEWER": {"backend": "llm", "model": "deepseek-v4.1-flash", "responsibility": "审查代码与提出修正意见"},
+    "TESTER": {"backend": "sandbox", "responsibility": "在 Docker 沙箱运行测试并收集证据"},
+}
+
+
+def default_agent_config() -> dict:
+    """Return a new editable project template without credentials."""
+    return {"revision": 0, **validate_agent_config({"agents": DEFAULT_AGENTS})}
 ROLE_SET = frozenset(ROLES)
 BACKENDS = frozenset(("codex", "llm", "sandbox"))
 SUPPORTED_TOOLS = frozenset(("read_file", "write_file", "apply_patch", "run_tests", "docker"))
@@ -60,6 +71,8 @@ def _clean_text(value, path: str, field: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         _fail(path, f"{field} must be non-empty")
+    if len(cleaned) > (1000 if field == "responsibility" else 128):
+        _fail(path, f"{field} is too long")
     return cleaned
 
 

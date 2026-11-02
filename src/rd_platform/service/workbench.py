@@ -22,7 +22,7 @@ class StrictModel(BaseModel):
 class RunRequest(StrictModel):
     project_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     requirements: str = Field(min_length=1, max_length=16000, pattern=r"\S")
-    backend: Literal["codex", "llm", "mixed"] = "codex"
+    backend: Literal["codex", "llm", "mixed", "configured"] = "codex"
     template: Literal["custom", "lru"] = "custom"
     max_retries: StrictInt = Field(default=3, ge=0, le=3)
 
@@ -32,7 +32,7 @@ class WorkerRequest(StrictModel):
 
 
 class Heartbeat(WorkerRequest):
-    backends: list[Literal["codex", "llm", "mixed", "prd_codex", "prd_llm"]] = Field(max_length=5)
+    backends: list[Literal["codex", "llm", "mixed", "configured", "prd_codex", "prd_llm"]] = Field(max_length=6)
 
 
 class Lease(WorkerRequest):

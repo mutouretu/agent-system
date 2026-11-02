@@ -6,6 +6,7 @@ import uuid
 
 from sqlalchemy import (JSON, Column, Float, ForeignKey, Integer, MetaData, String, Table,
                         Text, create_engine, func, select, update)
+from rd_platform.agent_management import default_agent_config
 
 metadata = MetaData()
 projects = Table("workbench_projects", metadata,
@@ -56,7 +57,7 @@ class RunStore:
         with self.transaction() as db:
             existing = db.scalar(select(projects.c.payload).where(projects.c.id == project["id"]).with_for_update())
             if existing is not None:
-                protected = {key: existing['context'][key] for key in ('workspace', 'active_requirement') if key in existing.get('context', {})}
+                protected = {key: existing['context'][key] for key in ('workspace', 'active_requirement', 'agent_config') if key in existing.get('context', {})}
                 project = {**project, 'context': {**project.get('context', {}), **protected}}
                 db.execute(projects.update().where(projects.c.id == project["id"]).values(payload=project))
             else:
@@ -71,6 +72,25 @@ class RunStore:
     def get_project(self, project_id):
         with self.transaction() as db:
             return db.scalar(select(projects.c.payload).where(projects.c.id == project_id))
+
+    def get_agent_config(self, project_id):
+        project = self.get_project(project_id)
+        if project is None:
+            raise KeyError(project_id)
+        return project.get("context", {}).get("agent_config") or default_agent_config()
+
+    def update_agent_config(self, project_id, revision, agents):
+        with self.transaction() as db:
+            project = db.scalar(select(projects.c.payload).where(projects.c.id == project_id).with_for_update())
+            if project is None:
+                raise KeyError(project_id)
+            old = project.get("context", {}).get("agent_config") or default_agent_config()
+            if old["revision"] != revision:
+                raise StoreConflict("Agent 配置已更新，请刷新后重试")
+            saved = {"revision": revision + 1, "agents": agents}
+            project = {**project, "context": {**project.get("context", {}), "agent_config": saved}}
+            db.execute(projects.update().where(projects.c.id == project_id).values(payload=project))
+            return saved
 
     def update_workspace(self, project_id, workspace):
         with self.transaction() as db:
@@ -105,8 +125,14 @@ class RunStore:
                       requirements=requirements, template=template, max_retries=max_retries,
                       created_at=now, updated_at=now, generation=0, tasks=[], summary={})
         with self.transaction() as db:
-            if not db.scalar(select(projects.c.id).where(projects.c.id == project_id)):
+            project = db.scalar(select(projects.c.payload).where(projects.c.id == project_id).with_for_update())
+            if project is None:
                 raise KeyError(project_id)
+            if backend == "configured":
+                config = project.get("context", {}).get("agent_config")
+                if not config:
+                    raise StoreConflict("请先保存 Agent 配置")
+                record["summary"] = {"agent_config": config}
             if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(["QUEUED", "RUNNING"]))) >= 100:
                 raise StoreConflict("active run capacity reached (100)")
             db.execute(runs.insert().values(**record))

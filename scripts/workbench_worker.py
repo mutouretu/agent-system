@@ -26,6 +26,8 @@ from examples.software_team_demo import CodexArtifactGenerator
 from rd_platform.llm import LLMArtifactGenerator, create_provider, LLMConfigurationError
 from rd_platform.manager.software_team import SoftwareTeamWorkflow, save
 from rd_platform.manager.role_router import RoleRouter
+from rd_platform.agent_management import validate_agent_config
+from rd_platform.domain.agent import AgentRole
 from rd_platform.runtime.test_executor import DockerTestExecutor
 from rd_platform.agents.base import AgentInput, AgentStatus
 from rd_platform.agents.dev.requirements import RequirementArchitectAgent
@@ -103,6 +105,8 @@ class Worker:
         available = set(self.backends)
         if {"codex", "llm"} <= available:
             self.backends.append("mixed")
+        if available & {"codex", "llm"}:
+            self.backends.append("configured")
         self.backends += ['prd_' + backend for backend in ("codex", "llm") if backend in available]
         self.post("/heartbeat", backends=self.backends)
 
@@ -133,7 +137,30 @@ class Worker:
                 acceptance = {"tests/test_acceptance.py": (fixtures / "acceptance.py").read_text()}
             else:
                 requirements += "\n" + PYTHON_CONTRACT
-            if job["backend"] == "mixed":
+            if job["backend"] == "configured":
+                snapshot = job.get("summary", {}).get("agent_config")
+                if not isinstance(snapshot, dict):
+                    raise ValueError("configured run has no Agent configuration snapshot")
+                agents = validate_agent_config({"agents": snapshot["agents"]})["agents"]
+                if agents["TESTER"]["backend"] != "sandbox":
+                    raise ValueError("TESTER must use Docker sandbox")
+                selected = {}
+                backends = {}
+                for role in (AgentRole.ARCHITECT, AgentRole.CODER, AgentRole.REVIEWER):
+                    spec = agents[role.value]
+                    backend, model = spec["backend"], spec["model"]
+                    if backend == "codex":
+                        selected[role] = CodexArtifactGenerator(directory / f"cli-{role.value.lower()}",
+                            model=None if model == "default" else model)
+                    elif backend == "llm":
+                        selected[role] = LLMArtifactGenerator(create_provider(model=model))
+                    else:
+                        raise ValueError(f"{role.value} requires a model backend")
+                    backends[role] = backend
+                generator = RoleRouter(selected[AgentRole.ARCHITECT], selected[AgentRole.CODER],
+                                       selected[AgentRole.REVIEWER], backends=backends,
+                                       responsibilities={role: agents[role.value]["responsibility"] for role in backends})
+            elif job["backend"] == "mixed":
                 generator = RoleRouter(CodexArtifactGenerator(directory / "cli"),
                                        LLMArtifactGenerator(create_provider()))
             elif job["backend"] == "codex":

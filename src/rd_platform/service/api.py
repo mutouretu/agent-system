@@ -18,6 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from rd_platform.domain import Project, Task, TaskInput, TaskOutput
+from rd_platform.agent_management import validate_agent_config
 from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher, create_default_registry
 from .run_store import RunStore, StoreConflict
 from .workbench import install_workbench, worker_token
@@ -86,6 +87,12 @@ class WorkspaceRequest(BaseModel):
     revision: int = Field(ge=0)
     milestones: list[WorkspaceMilestone] = Field(max_length=50)
     accepted: list[Annotated[str, Field(max_length=4096)]] = Field(default_factory=list, max_length=1000)
+
+
+class AgentConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    revision: StrictInt = Field(ge=0)
+    agents: dict
 
 
 class BodyLimit:
@@ -195,6 +202,27 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
     async def list_agents():
         return {"agents": [metadata.to_dict() for metadata in registry.list_agents()]}
 
+    @app.get("/v1/projects/{id}/agents/config")
+    async def get_agent_config(id: str):
+        try:
+            return app.state.run_store.get_agent_config(id)
+        except KeyError:
+            raise HTTPException(404, "project not found") from None
+
+    @app.put("/v1/projects/{id}/agents/config")
+    async def put_agent_config(id: str, request: AgentConfigRequest):
+        try:
+            agents = validate_agent_config({"agents": request.agents})["agents"]
+            if agents["TESTER"]["backend"] != "sandbox":
+                raise ValueError("TESTER 必须使用 Docker 沙箱执行")
+            return app.state.run_store.update_agent_config(id, request.revision, agents)
+        except ValueError as error:
+            if isinstance(error, StoreConflict):
+                raise HTTPException(409, str(error)) from None
+            raise HTTPException(422, str(error)) from None
+        except KeyError:
+            raise HTTPException(404, "project not found") from None
+
     @app.put("/v1/projects/{id}/workspace")
     async def update_workspace(id: str, request: WorkspaceRequest):
         try:
@@ -207,6 +235,8 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
     @app.post("/v1/projects", status_code=201)
     async def create_project(request: ProjectRequest):
         # Bounded, single-process development store; no persistence claim.
+        if "agent_config" in request.context:
+            raise HTTPException(422, "Agent 配置须通过专用接口保存")
         if len(projects) >= 100:
             raise HTTPException(409, "in-memory project capacity reached (100); restart to clear")
         try:
