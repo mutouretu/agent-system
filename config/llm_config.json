@@ -1,0 +1,10 @@
+{
+  "provider": "openai",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "model": "deepseek-v4.1-flash",
+  "response_format": "json_object",
+  "enable_thinking": false,
+  "stream": true,
+  "max_tokens": 8192,
+  "timeout": 540
+}

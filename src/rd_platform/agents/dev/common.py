@@ -1,11 +1,15 @@
 """Shared validation, dependency resolution and structured generation."""
 
+import logging
+
 from pydantic import ValidationError
 from rd_platform.agents.base import AgentInput, AgentOutput, AgentStatus, BaseAgent
 from rd_platform.domain.task import json_object
 from .interfaces import ArtifactGenerator, GenerationRequest
 from .prompts import PROMPTS
-from rd_platform.llm import LLMArtifactGenerator, LLMProvider
+from rd_platform.llm import LLMArtifactGenerator, LLMProvider, LLMResponseError
+
+logger = logging.getLogger(__name__)
 
 
 def input_payload(request: AgentInput, allowed: set[str]) -> dict:
@@ -57,7 +61,13 @@ class GeneratingAgent(BaseAgent):
     async def generate(self, data, schema):
         prompt = GenerationRequest(role=self.metadata.role, system_prompt=PROMPTS[self.metadata.role],
                                    input_data=json_object(data), output_schema=schema.model_json_schema())
-        result = await self.generator.generate(prompt)
-        if not isinstance(result, dict):
-            raise ValueError("generator must return a JSON object, not prose or a code fence")
-        return schema.model_validate(json_object(result))
+        try:
+            result = await self.generator.generate(prompt)
+            if not isinstance(result, dict):
+                raise ValueError("generator must return a JSON object, not prose or a code fence")
+            return schema.model_validate(json_object(result))
+        except (ValidationError, LLMResponseError, ValueError) as exc:
+            # Record only the failure class. Model text may contain project data or secrets.
+            logger.warning("agent_artifact_rejected role=%s schema=%s error_type=%s",
+                           self.metadata.role.value, schema.__name__, type(exc).__name__)
+            raise

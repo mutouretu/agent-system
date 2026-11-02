@@ -25,6 +25,7 @@ import httpx
 from examples.software_team_demo import CodexArtifactGenerator
 from rd_platform.llm import LLMArtifactGenerator, create_provider, LLMConfigurationError
 from rd_platform.manager.software_team import SoftwareTeamWorkflow, save
+from rd_platform.manager.role_router import RoleRouter
 from rd_platform.runtime.test_executor import DockerTestExecutor
 from rd_platform.agents.base import AgentInput, AgentStatus
 from rd_platform.agents.dev.requirements import RequirementArchitectAgent
@@ -99,7 +100,10 @@ class Worker:
             pass
         if not self.backends:
             raise RuntimeError("No backend configured: sign into Codex with ChatGPT or configure LLM API credentials")
-        self.backends += ['prd_' + backend for backend in self.backends]
+        available = set(self.backends)
+        if {"codex", "llm"} <= available:
+            self.backends.append("mixed")
+        self.backends += ['prd_' + backend for backend in ("codex", "llm") if backend in available]
         self.post("/heartbeat", backends=self.backends)
 
     def heartbeat_loop(self):
@@ -129,8 +133,13 @@ class Worker:
                 acceptance = {"tests/test_acceptance.py": (fixtures / "acceptance.py").read_text()}
             else:
                 requirements += "\n" + PYTHON_CONTRACT
-            generator = (CodexArtifactGenerator(directory / "cli") if job["backend"] == "codex"
-                         else LLMArtifactGenerator(create_provider()))
+            if job["backend"] == "mixed":
+                generator = RoleRouter(CodexArtifactGenerator(directory / "cli"),
+                                       LLMArtifactGenerator(create_provider()))
+            elif job["backend"] == "codex":
+                generator = CodexArtifactGenerator(directory / "cli")
+            else:
+                generator = LLMArtifactGenerator(create_provider())
             executor = DockerTestExecutor(directory / "sandbox", ROOT / "sandbox-validation/wheels", acceptance_tests=acceptance)
 
             async def event(kind, task):

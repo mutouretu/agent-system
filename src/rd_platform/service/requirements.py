@@ -41,7 +41,7 @@ class Draft(Contract):
 
 
 class Submit(Draft):
-    backend: Literal['codex', 'llm'] = 'codex'
+    backend: Literal['codex', 'llm', 'mixed'] = 'codex'
 
     @model_validator(mode='after')
     def ready(self):

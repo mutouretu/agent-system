@@ -9,4 +9,5 @@ sandbox-validation/
 /logs/
 /models/
 /归档.zip
+/config/llm.local.json
 

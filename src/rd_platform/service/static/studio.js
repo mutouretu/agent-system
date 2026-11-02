@@ -10,7 +10,7 @@ const studioMessage=node('p','field-note'); studioMessage.id='studio-message'; s
 const copilot=node('section','studio-copilot'); copilot.append(node('div','eyebrow','ARCHITECT COPILOT'),node('h2','','AI 需求助手 & 原始文本导入'));
 const chat=node('div','studio-chat'); chat.id='studio-chat';
 const rawLabel=node('label','','粘贴需求草案 / 向 Architect 提问'); const raw=node('textarea'); raw.id='studio-raw'; raw.rows=4; raw.maxLength=16000; raw.placeholder='粘贴 Markdown、业务需求，或说明要修改的条款…'; rawLabel.append(raw);
-const copilotActions=node('div','composer-options'); const backendLabelEl=node('label','','AI 后端'); const studioBackend=node('select'); studioBackend.id='studio-backend'; for(const [value,text] of [['codex','Codex · 订阅'],['llm','LLM API']]){ const option=node('option','',text);option.value=value;studioBackend.append(option);} backendLabelEl.append(studioBackend);
+const copilotActions=node('div','composer-options'); const backendLabelEl=node('label','','AI 后端'); const studioBackend=node('select'); studioBackend.id='studio-backend'; for(const [value,text] of [['mixed','Codex 架构 + DeepSeek 编码审查'],['codex','Codex · 订阅'],['llm','LLM API']]){ const option=node('option','',text);option.value=value;studioBackend.append(option);} backendLabelEl.append(studioBackend);
 const parseButton=node('button','primary','🤖 一键 AI 结构化拆解与回填'); copilotActions.append(backendLabelEl,parseButton); copilot.append(chat,rawLabel,copilotActions);
 const studioLayout=node('div','studio-layout'), studioMain=node('div'), studioAside=node('aside','studio-aside');
 const packagePanel=node('section','studio-panel'), packageHead=node('div','section-heading'); packageHead.append(node('h2','','业务功能包'));
@@ -35,7 +35,7 @@ async function openStudio(projectId,reqId,push=true){
   const navigation=switchView('requirement-studio',`#requirements/${projectId}/${reqId}`,push);
   clearTimeout(studioPoll); studio=null;studioMessage.textContent='正在加载需求…';setStudioBusy(true);
   try {const [req,project]=await Promise.all([api(`/v1/projects/${projectId}/requirements/${reqId}`),api(`/v1/projects/${projectId}`)]);if(navigation!==state.navigation)return;
-    studio={...req,document:req.document || emptyPRD()};state.project=project;studioDirty=false;studioFilter='ALL';raw.value='';studioBackend.value=project.context?.preferred_backend==='llm'?'llm':'codex';$('breadcrumb-current').textContent='需求管理 / PRD 工作台';renderStudio();studioMessage.textContent=`已加载草稿 · 版本 ${studio.revision}`;setStudioBusy(false);
+    studio={...req,document:req.document || emptyPRD()};state.project=project;studioDirty=false;studioFilter='ALL';raw.value='';studioBackend.value=project.context?.preferred_backend==='mixed'?'mixed':project.context?.preferred_backend==='llm'?'llm':'codex';$('breadcrumb-current').textContent='需求管理 / PRD 工作台';renderStudio();studioMessage.textContent=`已加载草稿 · 版本 ${studio.revision}`;setStudioBusy(false);
     if(req.analysis_id) pollAnalysis(req.analysis_id,navigation);
   }catch(error){if(navigation===state.navigation){studioMessage.textContent=error.message;}}
 }
@@ -87,7 +87,7 @@ studioSave.addEventListener('click',()=>saveStudio());studioSubmit.addEventListe
 async function analyzeStudio(boundary=false){
   if(!studio||studioBusy)return;const prompt=boundary?'请在保留现有业务范围的前提下，补全边界条件与可测试的验收用例；不明确的参数请提问。':raw.value.trim();
   if(!prompt){studioMessage.textContent='请先粘贴需求草案或输入问题。';return;}setStudioBusy(true);const navigation=state.navigation;
-  try {const result=await api(`/v1/projects/${studio.project_id}/requirements/${studio.id}/analyze`,{method:'POST',body:JSON.stringify({revision:studio.revision,prompt,document:studio.document,messages:studio.messages.slice(-20),backend:studioBackend.value})});
+  try {const result=await api(`/v1/projects/${studio.project_id}/requirements/${studio.id}/analyze`,{method:'POST',body:JSON.stringify({revision:studio.revision,prompt,document:studio.document,messages:studio.messages.slice(-20),backend:studioBackend.value==='mixed'?'codex':studioBackend.value})});
     if(navigation!==state.navigation)return;studio.messages.push({role:'user',content:prompt});raw.value='';studio.analysis_id=result.run_id;studioDirty=true;renderStudio();pollAnalysis(result.run_id,navigation);
   }catch(error){if(navigation===state.navigation){studioMessage.textContent=error.message;setStudioBusy(false);}}
 }

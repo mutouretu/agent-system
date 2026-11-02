@@ -318,6 +318,8 @@ PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python examples/software_team_demo.p
 
 `create_provider(config_file=...)` 和 Demo 的 `--config` 支持 JSON 文件，也可设置 `LLM_CONFIG_FILE`。示例见 `examples/llm_config.example.json`。优先级为显式工厂参数 > 环境变量 > JSON 文件 > 默认值。没有隐式读取 dotenv、认证目录或 Python 配置代码。
 
+本地工作台可在 `config/llm.local.json` 的 `api_key` 字段填写百炼等 OpenAI 兼容服务的密钥。该文件被 Git 忽略，`scripts/workbench.sh` 启动时自动设置 `LLM_CONFIG_FILE`；修改后须重启 Worker。若当前终端另设了 `OPENAI_API_KEY`、`LLM_BASE_URL` 或 `LLM_MODEL`，环境变量仍优先于文件。
+
 | 环境变量 | JSON 字段 / 默认值 |
 | --- | --- |
 | OPENAI_API_KEY | api_key；默认必需 |
@@ -420,3 +422,9 @@ Team Lead 当前是基于真实状态的汇总界面，并非新增独立模型�
 PRD 持久化在 `workbench_requirements` 表；版本冲突返回 409。保存会同步项目交付面板，提交在同一数据库事务内保存需求、创建队列任务、关联里程碑。AI 拆解使用独立 `prd` 队列任务与严格 JSON Schema，不执行代码、不伪造测试通过证据。原始草稿可以先保存，提交执行必须满足完整 PRD 契约。
 
 升级后启动新版 `scripts/workbench_worker.py`（或重新启动 `scripts/workbench.sh`）以注册 `prd_codex` / `prd_llm` 能力。旧 Worker 不能领取 PRD 分析任务；没有对应 Worker 时返回明确提示。真实模型生成的业务代码仍仅在 Docker 中验证。
+
+### 混合模型与 DashScope 配置
+
+默认的非敏感参数位于 `config/llm_config.json`：Architect 使用已登录的 Codex CLI，Coder 与 Reviewer 在 `mixed` 模式下使用 `deepseek-v4.1-flash`，通过 DashScope OpenAI 兼容地址流式生成 JSON。将 API Key 仅放在被 Git 忽略的 `config/llm.local.json` 或环境变量 `OPENAI_API_KEY`；本地文件可包含同一组非敏感参数并覆盖默认配置。`scripts/workbench.sh` 优先读取本地文件。Tester 始终使用禁网 Docker 沙箱执行测试，目前没有独立模型调用。
+
+自定义任务的工作流会严格验证源码与测试文件。仅缺少的提交摘要和可无歧义归位的顶层测试文件路径可自动修复格式；缺少真实源码或测试、截断输出和无效 JSON 仍会失败。`scripts/validate_cli_loop.py` 验证的是独立的 Codex 订阅修复控制器；混合模式的 Architect → Coder → Reviewer → Tester 通过工作台运行记录验证。

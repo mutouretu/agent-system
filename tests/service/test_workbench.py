@@ -116,6 +116,18 @@ def test_queue_ownership_generation_and_backend_matching(client):
     assert client.get(f"/v1/runs/{second['id']}").json()["status"] == "QUEUED"
 
 
+def test_mixed_run_is_claimed_only_by_mixed_worker(client):
+    run = submit(client, backend="mixed")
+    headers, codex_worker = worker(client)
+    assert client.post("/internal/worker/claim", json={"worker_id": codex_worker}, headers=headers).json()["run"] is None
+    mixed_worker = "c" * 32
+    response = client.post("/internal/worker/heartbeat", json={"worker_id": mixed_worker,
+        "backends": ["codex", "llm", "mixed", "prd_codex", "prd_llm"]}, headers=headers)
+    assert response.status_code == 200
+    claimed = client.post("/internal/worker/claim", json={"worker_id": mixed_worker}, headers=headers).json()["run"]
+    assert claimed["id"] == run["id"]
+
+
 def test_expired_lease_is_interrupted_and_cannot_publish(client):
     run = submit(client)
     headers, worker_id = worker(client)

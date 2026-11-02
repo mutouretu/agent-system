@@ -90,7 +90,7 @@ function deliveryView(projects,runs) {
     for(const p of packages.filter(p=>p.status==='COMPLETED')) { const seconds=duration(history.find(run=>run.id===p.run_id)); if(seconds!==null) cycles.push(seconds); }
     const status=history.some(run=>['RUNNING','QUEUED'].includes(run.status)) ? 'IN_PROGRESS' : packages.length && completed===packages.length ? 'COMPLETED' : latest?.status==='COMPLETED' ? 'REVIEW_PENDING' : ['FAILED','INTERRUPTED'].includes(latest?.status) ? 'NEEDS_ATTENTION' : 'PLANNED';
     const durations=history.map(duration).filter(value=>value!==null);
-    return {id:project.id,name:project.name,objective:typeof project.context?.requirements==='string'?project.context.requirements:'',milestone:typeof delivery.milestone==='string'?delivery.milestone:null,packages_total:packages.length,packages_completed:completed,progress:packages.length?Math.round(1000*completed/packages.length)/10:null,status,elapsed_seconds:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)*10)/10:null,backend:latest ? latest.backend==='codex'?'codex-cli':'llm-api':project.context?.preferred_backend==='cli'?'codex-cli':project.context?.preferred_backend==='llm'?'llm-api':null};
+    return {id:project.id,name:project.name,objective:typeof project.context?.requirements==='string'?project.context.requirements:'',milestone:typeof delivery.milestone==='string'?delivery.milestone:null,packages_total:packages.length,packages_completed:completed,progress:packages.length?Math.round(1000*completed/packages.length)/10:null,status,elapsed_seconds:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)*10)/10:null,backend:latest ? latest.backend==='codex'?'codex-cli':latest.backend==='mixed'?'codex + llm':'llm-api':project.context?.preferred_backend==='cli'?'codex-cli':project.context?.preferred_backend==='mixed'?'codex + llm':project.context?.preferred_backend==='llm'?'llm-api':null};
   });
   const total=items.reduce((n,p)=>n+p.packages_total,0),delivered=items.reduce((n,p)=>n+p.packages_completed,0);
   return {projects:items,stats:{projects_total:items.length,active_projects:items.filter(p=>p.status==='IN_PROGRESS').length,packages_total:total,packages_delivered:delivered,delivery_percent:total?Math.round(1000*delivered/total)/10:null,average_delivery_seconds:cycles.length?Math.round(cycles.reduce((a,b)=>a+b,0)/cycles.length*10)/10:null}};
@@ -236,7 +236,7 @@ async function openProject(id, push=true, selectedRun=null) {
     if(navigation!==state.navigation) return;
     state.project=project; state.projectRuns=history.runs; renderProject();
     if(!drafts.has(id) && typeof project.context?.requirements==='string') $('workspace-requirements').value=project.context.requirements;
-    if(project.context?.preferred_backend) $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':'llm';
+    if(project.context?.preferred_backend) $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':project.context.preferred_backend;
     const runId=selectedRun || history.runs[0]?.id;
     if(runId) await loadRun(runId); else renderWorkspace();
   } catch(error) { if(navigation===state.navigation) { $('project-title').textContent='项目加载失败'; notice(error.message); } }
@@ -496,7 +496,7 @@ $('delivery-form').addEventListener('submit',async event=>{
     $('delivery-dialog').close(); $('delivery-form').reset();
     await refreshOverview(); await openProject(project.id);
     $('workspace-requirements').value=requirements;
-    $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':'llm';
+    $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':project.context.preferred_backend;
   } catch(error) { $('delivery-error').textContent=error.message; }
   finally { $('delivery-submit').disabled=false; }
 });

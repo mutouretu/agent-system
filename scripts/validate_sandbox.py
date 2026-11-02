@@ -7,6 +7,7 @@ socket, host environment or credentials are passed into any execution container.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -37,7 +38,15 @@ def is_removed(client, container_id):
         return True
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pytest-path", default="tests", help="path under tests/ to run inside Docker")
+    args = parser.parse_args(argv)
+    selected = (ROOT / args.pytest_path).resolve()
+    if selected != ROOT / "tests" and not selected.is_relative_to(ROOT / "tests"):
+        parser.error("--pytest-path must be under tests/")
+    if not selected.exists():
+        parser.error("--pytest-path does not exist")
     image = os.environ.get("SANDBOX_IMAGE", "python:3.12-slim")
     run_dir = STATE / f"run-{uuid.uuid4().hex}"
     workspace, inputs, output = (run_dir / name for name in ("workspace", "input", "output"))
@@ -131,7 +140,7 @@ def main():
                 "/usr/bin/env", "PYTHONPATH=/tmp/deps:/workspace/src:/workspace",
                 "SANDBOX_EVIDENCE=/input/evidence.json", "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1",
                 "python", "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                "--junitxml=/output/pytest.xml", "/workspace/tests",
+                "--junitxml=/output/pytest.xml", "/workspace/" + str(selected.relative_to(ROOT)),
             ])
             print(stdout, end="", flush=True)
             print(stderr, end="", file=sys.stderr, flush=True)

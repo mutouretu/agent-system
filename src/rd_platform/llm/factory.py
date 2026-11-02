@@ -11,6 +11,8 @@ ENV_FIELDS = {
     "OPENAI_API_KEY": "api_key", "LLM_BASE_URL": "base_url", "LLM_MODEL": "model",
     "LLM_TIMEOUT": "timeout", "LLM_MAX_TOKENS": "max_tokens",
     "LLM_RESPONSE_FORMAT": "response_format", "LLM_REQUIRE_API_KEY": "require_api_key",
+    "LLM_ENABLE_THINKING": "enable_thinking",
+    "LLM_STREAM": "stream",
 }
 
 
@@ -48,8 +50,18 @@ def create_provider(config_file=None, *, environ=None, **overrides):
             if value not in ("true", "false"):
                 raise ValueError()
             config["require_api_key"] = value == "true"
+        if isinstance(config.get("enable_thinking"), str):
+            value = config["enable_thinking"].lower()
+            if value not in ("true", "false"):
+                raise ValueError()
+            config["enable_thinking"] = value == "true"
+        if isinstance(config.get("stream"), str):
+            value = config["stream"].lower()
+            if value not in ("true", "false"):
+                raise ValueError()
+            config["stream"] = value == "true"
     except ValueError:
-        raise LLMConfigurationError("invalid LLM_TIMEOUT, LLM_MAX_TOKENS or LLM_REQUIRE_API_KEY") from None
+        raise LLMConfigurationError("invalid LLM_TIMEOUT, LLM_MAX_TOKENS, LLM_REQUIRE_API_KEY, LLM_ENABLE_THINKING or LLM_STREAM") from None
     if set(config) - (set(ENV_FIELDS.values()) | {"transport"}):
         raise LLMConfigurationError("unknown provider overrides")
     return OpenAIProvider(**config)

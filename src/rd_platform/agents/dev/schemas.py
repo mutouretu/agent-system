@@ -79,6 +79,30 @@ class CoderArtifacts(Contract):
     tests: dict[StrictStr, StrictStr] = Field(min_length=1, max_length=100)
     commit_message: Annotated[Text, Field(max_length=256)]
 
+    @model_validator(mode="before")
+    @classmethod
+    def recover_unambiguous_formatting(cls, value):
+        """Repair only metadata and misplaced test paths; never invent source/tests."""
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        if "commit_message" not in result:
+            result["commit_message"] = "Implement requested changes"
+        misplaced = {}
+        for key in tuple(result):
+            if not isinstance(key, str):
+                continue
+            path = key[1:-1] if key.startswith("`") and key.endswith("`") else key
+            if path.startswith("tests/") and path.endswith(".py"):
+                safe_path(path)
+                misplaced[path] = result.pop(key)
+        if misplaced:
+            tests = result.get("tests", {})
+            if not isinstance(tests, dict) or set(tests) & set(misplaced):
+                raise ValueError("misplaced test path conflicts with tests mapping")
+            result["tests"] = {**tests, **misplaced}
+        return result
+
     @model_validator(mode="after")
     def valid_files(self):
         seen = set()

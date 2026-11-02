@@ -29,6 +29,24 @@ def test_worker_preflight_closes_sdk_client_without_context_manager(tmp_path, mo
     assert calls[-1] == ("/heartbeat", {"backends": ["codex", "prd_codex"]})
 
 
+def test_worker_advertises_mixed_only_with_both_backends(tmp_path, monkeypatch):
+    wheel = tmp_path / "sandbox-validation/wheels/pytest-8.3.5-py3-none-any.whl"
+    wheel.parent.mkdir(parents=True)
+    wheel.touch()
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    client = SimpleNamespace(ping=lambda: None, close=lambda: None,
+                             images=SimpleNamespace(get=lambda image: None))
+    monkeypatch.setattr(module.docker, "from_env", lambda **kwargs: client)
+    monkeypatch.setattr(module, "CodexArtifactGenerator", lambda path: None)
+    monkeypatch.setattr(module, "create_provider", lambda: object())
+    worker = object.__new__(module.Worker)
+    worker.directory = tmp_path
+    worker.backends = []
+    worker.post = lambda path, **kwargs: None
+    worker.preflight()
+    assert worker.backends == ["codex", "llm", "mixed", "prd_codex", "prd_llm"]
+
+
 @pytest.mark.parametrize("url", ["https://example.com", "http://remote:8000", "http://user:pass@localhost:8000"])
 def test_worker_rejects_nonlocal_api_before_reading_credentials(url):
     with pytest.raises(ValueError, match="localhost"):

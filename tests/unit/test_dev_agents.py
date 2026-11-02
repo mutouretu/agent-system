@@ -105,6 +105,24 @@ def test_coder_consumes_upstream_and_does_not_execute_code():
     assert backend.calls[0].input_data["architecture"]["subtasks"][0]["id"] == "implement"
 
 
+def test_coder_recovers_flat_test_path_and_missing_summary_without_fabricating_code():
+    candidate = {"files": {"src/cache.py": "class Cache: pass\n"},
+                 "`tests/test_cache.py`": "def test_cache(): assert True\n"}
+    result = run(dev.CoderAgent(FakeGenerator(candidate)), {"architecture": architecture()})
+    assert result.status == AgentStatus.COMPLETED
+    assert result.artifacts["tests"] == {"tests/test_cache.py": candidate["`tests/test_cache.py`"]}
+    assert result.artifacts["commit_message"] == "Implement requested changes"
+    assert "`tests/test_cache.py`" in candidate  # source input is unchanged
+
+
+def test_coder_rejects_missing_real_tests_and_unknown_fields(caplog):
+    for candidate in ({"files": {"src/cache.py": "pass\n"}},
+                      {"files": {"src/cache.py": "pass\n"}, "tests": {}, "diff": ""}):
+        result = run(dev.CoderAgent(FakeGenerator(candidate)), {"architecture": architecture()})
+        assert result.status == AgentStatus.FAILED and result.artifacts == {}
+    assert "agent_artifact_rejected role=CODER" in caplog.text
+
+
 @pytest.mark.parametrize("path", ["/tmp/pwn", "../pwn", "src/../../pwn", "src//file.py", "./file.py",
                                   "C:/file.py", "src\\file.py", ".git/config", ".ssh/id_rsa", "src/\x00.py"])
 def test_unsafe_artifact_paths_fail_before_delivery(path):

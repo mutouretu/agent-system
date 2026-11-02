@@ -58,6 +58,40 @@ def test_text_mode_local_no_auth_and_missing_usage():
     assert generate(provider).token_usage == {}
 
 
+def test_optional_thinking_switch_is_sent_only_when_configured():
+    def handler(request):
+        assert json.loads(request.content)["enable_thinking"] is False
+        return httpx.Response(200, json=completion())
+    assert generate(provider_with(handler, enable_thinking=False)).structured_data == {"ok": True}
+
+
+def test_streaming_json_assembly_and_usage():
+    events = [
+        {"choices": [{"delta": {"content": '{"ok":'}, "finish_reason": None}]},
+        {"choices": [{"delta": {"content": " true}"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+    ]
+    body = "".join("data: " + json.dumps(event) + "\n\n" for event in events) + "data: [DONE]\n\n"
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["stream"] is True and payload["stream_options"] == {"include_usage": True}
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    result = generate(provider_with(handler, stream=True))
+    assert result.structured_data == {"ok": True} and result.token_usage["total_tokens"] == 5
+
+
+@pytest.mark.parametrize("body", [
+    'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
+    'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n',
+    'data: {"choices":[{"delta":{"tool_calls":[{}]},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    'data: {"choices":[{"delta":{"content":"not JSON"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+])
+def test_streaming_rejects_truncation_incomplete_tools_and_bad_json(body):
+    with pytest.raises(LLMResponseError):
+        generate(provider_with(lambda request: httpx.Response(200, text=body), stream=True))
+
+
 @pytest.mark.parametrize("status,error", [(401, LLMAuthenticationError), (403, LLMAuthenticationError),
     (429, LLMRateLimitError), (400, LLMError), (500, LLMError), (302, LLMError)])
 def test_http_failures_are_sanitized_and_not_retried(status, error):
@@ -116,7 +150,8 @@ def test_non_json_and_oversized_http_responses():
 
 @pytest.mark.parametrize("overrides", [{"base_url": "https://user:unit-secret@host/v1"},
     {"base_url": "https://host/v1?key=unit-secret"}, {"base_url": "file:///tmp/model"},
-    {"model": " "}, {"timeout": float("inf")}, {"max_tokens": True}, {"response_format": "wrong"}])
+    {"model": " "}, {"timeout": float("inf")}, {"max_tokens": True}, {"response_format": "wrong"},
+    {"enable_thinking": "false"}, {"stream": "true"}])
 def test_bad_config_does_not_echo_values(overrides):
     with pytest.raises(LLMConfigurationError) as caught:
         OpenAIProvider("unit-secret", **overrides)
@@ -131,6 +166,8 @@ def test_factory_precedence_file_environment_and_overrides(tmp_path):
     assert provider.model == "explicit-model" and provider.timeout == 12
     assert provider._api_key == "env-key"
     assert create_provider(environ={"LLM_CONFIG_FILE": str(config)}).model == "file-model"
+    assert create_provider(config, environ={"LLM_ENABLE_THINKING": "false"}).enable_thinking is False
+    assert create_provider(config, environ={"LLM_STREAM": "true"}).stream is True
 
 
 def test_missing_and_invalid_configuration(tmp_path):
