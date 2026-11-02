@@ -84,9 +84,9 @@ def main():
             summary["services"][name] = {"id": container.id, "health": state["Health"]["Status"],
                                           "read_only_root": host["ReadonlyRootfs"], "image_id": container.attrs["Image"]}
             (run / f"{name}.log").write_bytes(container.logs(tail=100))
+        # project_demo.py creates a persistent project; service tests cover project dispatch.
         for label, command in (
             ("client", ["python", "/app/examples/client_demo.py", "--probe-url", "http://probe:8001"]),
-            ("project-client", ["python", "/app/examples/project_demo.py"]),
         ):
             code, streams = services["api"].exec_run(command, demux=True)
             stdout, stderr = (stream.decode("utf-8", errors="replace") if stream else "" for stream in streams)

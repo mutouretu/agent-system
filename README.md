@@ -205,7 +205,7 @@ Agent 接收 `AgentInput`，其中 payload 为任务输入，context 是独立�
 PYTHONDONTWRITEBYTECODE=1 .venv-control/bin/python scripts/validate_service.py
 ```
 
-示例创建“排序去重 → 统计”任务图，成功输出 `PASS`，下游 mean 为 2。验证控制器在容器中执行所有单元与服务测试，并分别调用原服务示例和项目示例，保存 `project-client.json` 作为真实 HTTP 调度证据。
+手动运行 `examples/project_demo.py` 会创建并持久保存一个“Data to statistics”示例项目。自动验证控制器不调用该示例，以免反复向项目列表添加记录；项目 API 调度由 `tests/service/test_service.py` 覆盖。
 
 项目定义和已完成的调度结果现已存入 PostgreSQL，服务重启后可恢复查看。原 `/dispatch` 仍是单进程同步示例接口；工作台使用下面新增的 `/v1/runs` 后台运行队列。须保持 API 单 worker 配置。自定义 Agent 通过 Python 注册（或注入 `create_app(..., registry=...)`），HTTP 请求不能注册 Python 类或上传控制面代码。
 
@@ -239,7 +239,7 @@ class EchoAgent(BaseAgent):
 
 旧的 `run(task, context) -> dict` 实现应显式包装：`registry.register(LegacyAgentAdapter(old_agent))`。适配器创建独立 Task 副本并把字典结果转成 AgentOutput，不通过捕获 TypeError 猜测签名或重试执行。已有 client_demo/project_demo 保持原调用方式。
 
-`tests/unit/test_base_agent.py` 使用 EchoAgent/DummyAgent 验证动态注册、角色、Schema、DAG 产物传递、日志、失败传播、取消/超时以及旧接口适配。`scripts/validate_service.py` 在 Docker 内运行全部单元和服务测试，包括动态注册 Agent 的 HTTP 验证；原有示例继续进行真实服务调用验收。
+`tests/unit/test_base_agent.py` 使用 EchoAgent/DummyAgent 验证动态注册、角色、Schema、DAG 产物传递、日志、失败传播、取消/超时以及旧接口适配。`scripts/validate_service.py` 在 Docker 内运行全部单元和服务测试，包括动态注册 Agent 的 HTTP 验证，并调用不会创建项目的 `client_demo` 验收真实服务。
 
 ## 软件研发角色骨架（方案 A）
 
@@ -266,7 +266,7 @@ Tester 仅调用注入的 `SandboxExecutor.run_tests(CoderArtifacts)`，不会�
 
 执行器回执 `SandboxTestResult` 必须包含代码摘要、execution_mode（docker/fake）、executed、run_id、退出码以及实际测试计数；未运行不能填入测量值。Tester 从计数计算 total/pass_rate（0–100，分母包含 skipped），未采集覆盖率时 coverage 为 null。只有退出码为 0、至少一项通过且没有 failed/errors/skipped 才输出 PASSED；失败、空测试集或跳过用例不会得到 100% 全通过结论。Fake-only 单元测试的证据始终标明 `execution_mode=fake`，不代表生成的候选代码真的被测试过。
 
-验证新增 `tests/unit/test_dev_agents.py`，覆盖 Schema、Prompt、路径约束、审查拒绝语义、修订输入、执行器证据及一个不执行候选代码的 Fake DAG 契约测试。服务测试覆盖后端已配置/未配置时的 API 行为；使用现有 `scripts/validate_service.py` 在 Docker 中运行全部测试，并验证原有 client_demo/project_demo。
+验证新增 `tests/unit/test_dev_agents.py`，覆盖 Schema、Prompt、路径约束、审查拒绝语义、修订输入、执行器证据及一个不执行候选代码的 Fake DAG 契约测试。服务测试覆盖后端已配置/未配置时的 API 行为；使用现有 `scripts/validate_service.py` 在 Docker 中运行全部测试并验证 `client_demo`。`project_demo.py` 仅供手动运行，运行时会创建持久化示例项目。
 
 ## 端到端软件研发团队（方案 B）
 
