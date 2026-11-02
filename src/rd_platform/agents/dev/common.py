@@ -63,27 +63,27 @@ class GeneratingAgent(BaseAgent):
         prompt = GenerationRequest(role=self.metadata.role, system_prompt=PROMPTS[self.metadata.role],
                                    input_data=json_object(data), output_schema=schema.model_json_schema())
         try:
-            result = await self.generator.generate(prompt)
-            if not isinstance(result, dict):
-                raise ValueError("generator must return a JSON object, not prose or a code fence")
-            try:
-                return schema.model_validate(json_object(result))
-            except ValidationError as error:
-                if not repair_format:
-                    raise
-                # One bounded repair of the model's JSON shape. Semantic and
-                # safety checks still run against the full strict contract.
-                feedback = [{"path": ".".join(map(str, item["loc"])), "type": item["type"]}
-                            for item in error.errors(include_input=False)[:20]]
-                retry = prompt.model_copy(update={
-                    "system_prompt": prompt.system_prompt + "\nYour prior JSON failed schema validation. Return a complete corrected object. Do not omit required fields or add unknown keys.",
-                    "input_data": {**prompt.input_data, "format_feedback": feedback,
-                                   "previous_json_excerpt": json.dumps(result, ensure_ascii=False)[:12000]},
-                })
-                repaired = await self.generator.generate(retry)
-                if not isinstance(repaired, dict):
-                    raise ValueError("repair must return a JSON object")
-                return schema.model_validate(json_object(repaired))
+            request = prompt
+            for attempt in range(3 if repair_format else 1):
+                result = await self.generator.generate(request)
+                if not isinstance(result, dict):
+                    raise ValueError("generator must return a JSON object, not prose or a code fence")
+                try:
+                    return schema.model_validate(json_object(result))
+                except ValidationError as error:
+                    if attempt >= (2 if repair_format else 0):
+                        raise
+                    # Return precise, bounded schema errors and the previous
+                    # review as data. The final result must still pass the
+                    # original strict schema; no fabricated defaults are used.
+                    feedback = [{"path": ".".join(map(str, item["loc"]))[:180],
+                                 "type": item["type"], "message": item["msg"][:180]}
+                                for item in error.errors(include_input=False)[:20]]
+                    request = prompt.model_copy(update={
+                        "system_prompt": prompt.system_prompt + "\nFORMAT REPAIR ONLY: your prior JSON failed validation. Preserve substantive review findings, correct the listed fields, and return one complete schema-compliant object without extra keys.",
+                        "input_data": {**prompt.input_data, "format_feedback": feedback,
+                                       "previous_json_excerpt": json.dumps(result, ensure_ascii=False)[:16000]},
+                    })
         except (ValidationError, LLMResponseError, ValueError) as exc:
             # Record only the failure class. Model text may contain project data or secrets.
             logger.warning("agent_artifact_rejected role=%s schema=%s error_type=%s",

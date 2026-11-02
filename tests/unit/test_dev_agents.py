@@ -204,6 +204,22 @@ def test_reviewer_repairs_one_structural_json_error_without_weakening_contract()
     assert backend.calls[1].input_data['format_feedback'][0]['path'].endswith('suggestion')
 
 
+def test_reviewer_format_repair_is_bounded_and_never_forges_approval():
+    class AlwaysMalformed:
+        def __init__(self): self.calls=[]
+        async def generate(self, request):
+            self.calls.append(request)
+            return {'review_status':'REJECTED',
+                    'issues':[{'severity':'ERROR','message':'missing bound', 'long unexpected key '*200:'bad'}],
+                    'correction_directives':[{'instruction':'add bound'}]}
+    backend=AlwaysMalformed()
+    result=run(dev.ReviewerAgent(backend), {'architecture':architecture(),'code':code()})
+    assert result.status == AgentStatus.FAILED
+    assert len(backend.calls)==3
+    assert len(backend.calls[1].input_data['format_feedback'][0]['path'])<=180
+    assert all('format_feedback' in call.input_data for call in backend.calls[1:])
+
+
 def test_correction_input_validates_previous_revision_without_auto_retry():
     backend = FakeGenerator(code())
     payload = {"architecture": architecture(), "previous_code": code(), "review": review(False)}
