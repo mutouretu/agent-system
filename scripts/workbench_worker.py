@@ -31,6 +31,7 @@ from rd_platform.domain.agent import AgentRole
 from rd_platform.runtime.test_executor import DockerTestExecutor
 from rd_platform.agents.base import AgentInput, AgentStatus
 from rd_platform.agents.dev.requirements import RequirementArchitectAgent
+from rd_platform.agents.dev.interfaces import GenerationRequest
 
 PYTHON_CONTRACT = """
 Execution contract: Python 3.12, standard library only, no external services or network.
@@ -124,6 +125,8 @@ class Worker:
     def run_job(self, job):
         if job['template'] == 'prd':
             return self.run_requirement(job)
+        if job['template'] == 'chat':
+            return self.run_chat(job)
         directory = self.directory / job["id"]
         directory.mkdir()
         summary = {"status": "FAILED"}
@@ -189,6 +192,47 @@ class Worker:
                 summary["all_containers_removed"] = all(item["container_removed"] for item in jobs) if jobs else None
             save(directory / "summary.json", summary)
         self.post(f"/runs/{job['id']}/finish", generation=job["generation"], summary=summary)
+
+    def run_chat(self, job):
+        """Answer inside the original run's discussion; never launch code or tests."""
+        directory = self.directory / job['id']
+        directory.mkdir(exist_ok=True)
+        try:
+            backend = job['backend']
+            model = None
+            if backend == 'configured':
+                snapshot = job.get('summary', {}).get('agent_config')
+                if not snapshot:
+                    raise ValueError('chat is missing its project Agent configuration')
+                spec = validate_agent_config({'agents': snapshot['agents']})['agents']['ARCHITECT']
+                backend, model = spec['backend'], spec['model']
+            elif backend == 'mixed':
+                backend = 'codex'
+            if backend == 'codex':
+                generator = CodexArtifactGenerator(directory / 'cli', model=None if model in (None, 'default') else model)
+            elif backend == 'llm':
+                generator = LLMArtifactGenerator(create_provider(**({'model': model} if model else {})))
+            else:
+                raise ValueError('chat requires a model backend')
+            prompt = GenerationRequest(role=AgentRole.ARCHITECT,
+                system_prompt=('You are the Team Lead answering a human question about ONE EXISTING software R&D run. '
+                    'The input contains the original request, role outcomes, exact failure evidence, and prior discussion. '
+                    'Answer the question directly in Chinese. Treat a question about a failure as discussion, never as a new feature request. '
+                    'Do not claim you ran tests or changed code. Do not reveal credentials. '
+                    'Return only JSON with an answer string of at most 8000 characters.'),
+                input_data={'run_context': job['summary'].get('chat_context', ''), 'question': job['requirements']},
+                output_schema={'type': 'object', 'properties': {'answer': {'type': 'string'}},
+                               'required': ['answer'], 'additionalProperties': False})
+            result = asyncio.run(generator.generate(prompt))
+            answer = result.get('answer') if isinstance(result, dict) else None
+            if not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 8000:
+                raise ValueError('model did not return a bounded answer')
+            summary = {'status': 'CHAT_READY', 'answer': answer.strip()}
+        except Exception as exc:
+            summary = {'status': 'FAILED', 'error': f'{type(exc).__name__}: Team Lead 回复失败，请检查 Worker 证据'}
+        summary['evidence_dir'] = str(directory)
+        save(directory / 'summary.json', summary)
+        self.post(f"/runs/{job['id']}/finish", generation=job['generation'], summary=summary)
 
     def run_requirement(self, job):
         directory = self.directory / job['id']

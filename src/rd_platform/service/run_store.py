@@ -1,6 +1,7 @@
 """Persistent local workbench queue. Production claims use PostgreSQL SKIP LOCKED."""
 
 from contextlib import contextmanager
+import json
 import time
 import uuid
 
@@ -142,7 +143,7 @@ class RunStore:
     def list_runs(self, project_id=None):
         with self.transaction() as db:
             self.expire(db)
-            query = select(*(column for column in runs.c if column.name not in ("tasks", "requirements"))).where(runs.c.template != 'prd').order_by(runs.c.created_at.desc()).limit(200)
+            query = select(*(column for column in runs.c if column.name not in ("tasks", "requirements"))).where(runs.c.template.notin_(['prd', 'chat'])).order_by(runs.c.created_at.desc()).limit(200)
             if project_id:
                 query = query.where(runs.c.project_id == project_id)
             return [self.public(dict(row), compact=True) for row in db.execute(query).mappings()]
@@ -165,6 +166,59 @@ class RunStore:
             if row is None:
                 raise KeyError(run_id)
             return self.public(dict(row))
+
+    @staticmethod
+    def _chat_rows(db, parent_id):
+        rows = db.execute(select(runs).where(runs.c.template == 'chat',
+            runs.c.summary['parent_run_id'].as_string() == parent_id)
+            .order_by(runs.c.created_at, runs.c.id).limit(50)).mappings().all()
+        return [dict(row) for row in rows]
+
+    def get_chat(self, parent_id):
+        with self.transaction() as db:
+            parent = db.execute(select(runs.c.id, runs.c.template).where(runs.c.id == parent_id)).first()
+            if parent is None or parent.template in ('chat', 'prd'):
+                raise KeyError(parent_id)
+            return [{"id": row['id'], "message": row['requirements'], "status": row['status'],
+                     "answer": row['summary'].get('answer'), "error": row['summary'].get('error'),
+                     "created_at": row['created_at']} for row in self._chat_rows(db, parent_id)]
+
+    def create_chat(self, parent_id, message):
+        now = time.time()
+        with self.transaction() as db:
+            parent = db.execute(select(runs).where(runs.c.id == parent_id).with_for_update()).mappings().first()
+            if parent is None or parent['template'] in ('chat', 'prd'):
+                raise KeyError(parent_id)
+            history = self._chat_rows(db, parent_id)
+            if any(row['status'] in ('QUEUED', 'RUNNING') for row in history):
+                raise StoreConflict('上一条讨论仍在处理，请等待回复')
+            if len(history) >= 50:
+                raise StoreConflict('本轮讨论已达 50 条上限')
+            if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(['QUEUED', 'RUNNING']))) >= 100:
+                raise StoreConflict('active run capacity reached (100)')
+            task_context = [{"role": task.get('capability'), "status": task.get('status'),
+                             "error": str(task.get('error') or '')[:8000],
+                             "output": task.get('output')} for task in parent['tasks'][-8:]]
+            context = {"original_requirement": parent['requirements'][:16000],
+                       "run_status": parent['status'], "run_error": str(parent['summary'].get('error') or '')[:10000],
+                       "tasks": task_context,
+                       "discussion": [{"question": item['requirements'][:2000],
+                                       "answer": str(item['summary'].get('answer') or '')[:4000]}
+                                      for item in history[-8:]]}
+            context_text = json.dumps(context, ensure_ascii=False)[:48000]
+            snapshot = parent['summary'].get('agent_config')
+            if parent['backend'] == 'configured' and not snapshot:
+                project = db.scalar(select(projects.c.payload).where(projects.c.id == parent['project_id']))
+                snapshot = project.get('context', {}).get('agent_config') if project else None
+            summary = {"parent_run_id": parent_id, "chat_context": context_text}
+            if snapshot:
+                summary['agent_config'] = snapshot
+            record = dict(id=uuid.uuid4().hex, project_id=parent['project_id'], status='QUEUED',
+                          backend=parent['backend'], requirements=message, template='chat', max_retries=0,
+                          created_at=now, updated_at=now, generation=0, tasks=[], summary=summary)
+            db.execute(runs.insert().values(**record))
+            self.event(db, record['id'], 'chat_queued', {"parent_run_id": parent_id})
+            return {"id": record['id'], "parent_run_id": parent_id, "status": 'QUEUED'}
 
     def get_events(self, run_id, after=0):
         with self.transaction() as db:
@@ -229,10 +283,13 @@ class RunStore:
         summary = {key: value for key, value in summary.items() if key != "final_artifacts"}
         with self.transaction() as db:
             row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
+            if row:
+                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id')
+                              if key in row['summary']}, **summary}
             if row and row["status"] in ("COMPLETED", "FAILED") and row["worker_id"] == worker_id and row["generation"] == generation and row["summary"] == summary:
                 return
             self.owned(db, run_id, worker_id, generation)
-            status = "COMPLETED" if summary.get("status") == "PASS" or (row['template'] == 'prd' and summary.get('status') == 'PRD_READY') else "FAILED"
+            status = "COMPLETED" if summary.get("status") == "PASS" or (row['template'] == 'prd' and summary.get('status') == 'PRD_READY') or (row['template'] == 'chat' and summary.get('status') == 'CHAT_READY') else "FAILED"
             db.execute(runs.update().where(runs.c.id == run_id).values(status=status, summary=summary,
                        updated_at=time.time(), lease_until=None))
             self.event(db, run_id, "run_finished", {"status": status, "error": summary.get("error")})

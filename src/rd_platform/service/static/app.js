@@ -1,11 +1,12 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {projects: [], runs: [], project: null, projectRuns: [], view: 'overview', navigation: 0, current: null, artifacts: [], events: [], stream: null, template: 'lru', projectId: null, file: null, revision: 0};
+const state = {projects: [], runs: [], project: null, projectRuns: [], view: 'overview', navigation: 0, current: null, chat: [], artifacts: [], events: [], stream: null, template: 'lru', projectId: null, file: null, revision: 0};
 const labels = {QUEUED:'等待领取',RUNNING:'运行中',COMPLETED:'已完成',FAILED:'失败',INTERRUPTED:'已中断',PENDING:'等待中',BLOCKED:'已阻塞'};
 const roles = [['architecture','架构师','ARCHITECT'],['coding','开发者','CODER'],['review','审查者','REVIEWER'],['testing','测试者','TESTER']];
 const lruRequirement = '实现一个 Python LRU Cache，支持 get、put、len 和按最近使用顺序返回 keys。\n正确处理容量校验、更新、淘汰、空值和实例隔离。\n为实现编写单元测试，并通过平台内置的独立验收测试。';
 const drafts = new Map();
 let submittingWorkspace = false;
+let submittingChat = false, chatButton = null;
 const projectManagementKey='rd-platform.project-management.v1';
 let projectEdits={};
 let editingProject=null, deletingProject=null;
@@ -37,7 +38,7 @@ async function openDevelopment(push=true) {
   const selected=projects.find(item=>item.id===lastWorkspaceId) || projects[0];
   if(selected) return openProject(selected.id,push);
   switchView('project-detail','#development',push);
-  state.project=null; state.projectRuns=[];
+  state.project=null; state.projectRuns=[]; state.chat=[];
   $('project-detail').classList.add('development-unselected');
   $('development-empty').classList.remove('hidden');
   $('breadcrumb-current').textContent='项目开发';
@@ -286,7 +287,7 @@ async function loadRun(id) {
   const navigation=state.navigation;
   state.stream?.close(); state.stream=null; state.current=null; ++state.revision;
   $('detail').classList.remove('hidden');
-  state.events=[]; state.file=null; state.artifacts=[];
+  state.events=[]; state.file=null; state.artifacts=[]; state.chat=[];
   $('detail-title').textContent='加载运行…'; $('rerun').disabled=true; $('download').disabled=true;
   $('flow').replaceChildren(); $('artifact-files').replaceChildren(); $('timeline').replaceChildren();
   for(const key of ['detail-subtitle','run-short','run-status','run-backend','run-time','run-tests','code-title','code-content','log-content','requirements-content']) $(key).textContent='';
@@ -298,6 +299,7 @@ async function loadRun(id) {
     if(navigation!==state.navigation) return;
     state.current=run; state.project=project; state.projectRuns=history.runs; $('download').disabled=false;
     $('breadcrumb-current').textContent = '项目研发空间'; renderRun(); renderTimeline(); renderWorkspace();
+    await refreshChat(id);
     await refreshArtifacts(id);
     if(navigation!==state.navigation) return;
     const stream = new EventSource(`/v1/runs/${id}/events`); state.stream = stream;
@@ -321,6 +323,12 @@ async function refreshRun(id) {
   state.runs=state.runs.map(item=>item.id===run.id ? {...item,status:run.status,summary:run.summary} : item);
   state.projectRuns=state.projectRuns.map(item=>item.id===run.id ? {...item,status:run.status,summary:run.summary} : item);
   renderRun(); renderWorkspace(); await refreshArtifacts(id);
+}
+async function refreshChat(id) {
+  const data=await api(`/v1/runs/${id}/chat`);
+  if(state.current?.id!==id) return;
+  state.chat=data.messages;
+  renderProductWorkspace();
 }
 function renderRun() {
   const run=state.current;
@@ -396,7 +404,8 @@ function renderWorkspace() {
   const run=state.current;
   const active=state.projectRuns.some(item=>['QUEUED','RUNNING'].includes(item.status));
   $('workspace-submit').disabled=submittingWorkspace || active || !state.project;
-  $('workspace-note').textContent=active ? '团队正在执行。可先编辑下一任务草稿，完成后再提交；草稿不会中途传给 Agent。' : '每次提交创建独立研发任务；本版不会自动继承上轮代码。支持 Python 标准库任务。';
+  if(chatButton) chatButton.disabled=!run || submittingChat;
+  $('workspace-note').textContent=active ? '团队正在执行；可以留言讨论当前运行，回复可能排队到当前阶段结束。启动新需求会创建独立运行。' : '询问当前运行会保留本轮上下文；启动新需求会创建独立运行，不继承上轮代码。';
   const history=$('workspace-history'); history.replaceChildren();
   if(!state.projectRuns.length) history.append(node('option','','暂无执行记录'));
   for(const item of state.projectRuns) { const option=node('option','',`${stamp(item.created_at)} · ${item.id.slice(0,8)} · ${labels[item.status]}`); option.value=item.id; history.append(option); }
@@ -562,7 +571,24 @@ const leadMessages=node('div'); leadMessages.id='lead-messages'; leadMessages.se
 leadPanel.append(leadMessages,$('workspace-form'));
 document.querySelector('.workspace-grid').after(leadPanel);
 squadPanel.querySelector('h2').textContent='多 Agent 团队对话';
-$('workspace-submit').textContent='发送给 Team Lead →';
+chatButton=node('button','secondary','询问当前运行'); chatButton.type='button'; chatButton.disabled=true;
+$('workspace-submit').before(chatButton);
+$('workspace-submit').textContent='启动新需求 →';
+$('workspace-form').querySelector('label[for="workspace-requirements"]').textContent='新需求或当前运行的追问';
+$('workspace-requirements').placeholder='输入新研发需求，或询问当前运行的失败原因与进展…';
+chatButton.addEventListener('click',async()=>{
+  const runId=state.current?.id, message=$('workspace-requirements').value.trim();
+  if(!runId) { $('workspace-error').textContent='请先选择一条运行记录。'; return; }
+  if(!message) { $('workspace-error').textContent='请输入要讨论的问题。'; return; }
+  if(submittingChat) return;
+  submittingChat=true; chatButton.disabled=true; $('workspace-error').textContent='';
+  try {
+    await api(`/v1/runs/${runId}/chat`,{method:'POST',body:JSON.stringify({message})});
+    if(state.current?.id===runId) { $('workspace-requirements').value=''; await refreshChat(runId); }
+  } catch(error) { $('workspace-error').textContent=error.message; }
+  finally { submittingChat=false; chatButton.disabled=!state.current; }
+});
+setInterval(()=>{ if(state.view==='project-detail' && state.current) refreshChat(state.current.id).catch(()=>{}); },8000);
 const milestonesPanel=node('section','project-panel milestones-panel');
 const milestoneHeading=node('div','section-heading'); milestoneHeading.append(node('h2','','开发里程碑与需求包'));
 const addMilestone=node('button','secondary','＋ 添加节点'); addMilestone.addEventListener('click',()=>editMilestone(null)); milestoneHeading.append(addMilestone);
@@ -611,10 +637,20 @@ function renderProductWorkspace() {
   const run=state.current, data=workspaceData(), tasks=run?.tasks || [];
   const architecture=[...tasks].reverse().find(t=>t.capability==='architecture' && t.output?.architecture_spec)?.output;
   const latest=tasks.at(-1), role=roles.find(r=>r[0]===latest?.capability)?.[1];
-  const lead=run?.status==='COMPLETED'?'团队已完成本轮实现与自动化验证。请检查右侧交付物，逐项确认业务验收标准。':run?.status==='QUEUED'?'需求已接收，正在等待团队领取。':run?.status==='RUNNING'?`团队正在推进${role || '研发'}阶段。审查或验证发现的问题将在本轮内交回开发者修订。`:run?'本轮研发需要跟进。请展开技术证据查看原因，并在下方描述调整要求。':'请描述业务目标、功能范围和验收标准，我将通过现有调度流程交给研发团队。';
+  const failedReview=run?.status==='FAILED' && latest?.capability==='review' && latest?.error?.includes('ValidationError');
+  const lead=run?.status==='COMPLETED'?'团队已完成本轮实现与自动化验证。请检查右侧交付物，逐项确认业务验收标准。':run?.status==='QUEUED'?'需求已接收，正在等待团队领取。':run?.status==='RUNNING'?`团队正在推进${role || '研发'}阶段。审查或验证发现的问题将在本轮内交回开发者修订。`:failedReview?'Reviewer 的结构化输出未通过格式校验，本轮已停止。可在下方询问当前运行，查看具体原因。':run?'本轮研发需要跟进。可询问当前运行了解原因，或展开技术证据。':'请描述业务目标、功能范围和验收标准，我将通过现有调度流程交给研发团队。';
   $('lead-messages').replaceChildren();
   if(run) { const request=node('article','message user-message'); request.append(node('strong','','你 · 本轮需求'),node('p','message-content',businessRequirementText(run.requirements))); $('lead-messages').append(request); }
   const report=node('article','message lead-message'); report.append(node('strong','','Team Lead · 状态汇总'),node('p','',lead)); $('lead-messages').append(report);
+  for(const item of state.chat) {
+    const question=node('article','message user-message');
+    question.append(node('strong','','你 · 本轮讨论'),node('p','message-content',item.message));
+    $('lead-messages').append(question);
+    const reply=node('article','message lead-message');
+    const answer=item.answer || (item.status==='FAILED' ? item.error || '回复失败，请重试。' : 'Team Lead 正在整理本轮上下文，等待回复…');
+    reply.append(node('strong','',`Team Lead · ${item.status==='COMPLETED'?'回复':item.status==='FAILED'?'回复失败':'处理中'}`),node('p','message-content',answer));
+    $('lead-messages').append(reply);
+  }
   const userCard=$('conversation').querySelector('.user-message'); userCard?.remove();
   if(!tasks.length) $('conversation').replaceChildren(node('p','panel-empty','团队领取任务后，架构、开发、审查与验收的阶段交接将在这里显示。'));
   $('feature-flow').replaceChildren(node('h3','','业务流程'));

@@ -106,6 +106,42 @@ def test_agent_config_rejects_secrets_and_non_sandbox_tester(client):
     assert client.get(path).json()["revision"] == 0
 
 
+def test_run_discussion_keeps_parent_context_and_never_creates_feature_run(client):
+    parent = submit(client)
+    headers, worker_id = worker(client)
+    claimed = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    assert claimed['id'] == parent['id']
+    finished = client.post(f"/internal/worker/runs/{parent['id']}/finish", headers=headers,
+        json={'worker_id': worker_id, 'generation': claimed['generation'],
+              'summary': {'status': 'FAILED', 'error': 'ReviewDecision issues.1.suggestion Field required'}})
+    assert finished.status_code == 200, finished.text
+    endpoint = f"/v1/runs/{parent['id']}/chat"
+    question = client.post(endpoint, json={'message': 'Reviewer 为什么失败？'})
+    assert question.status_code == 202, question.text
+    assert client.post(endpoint, json={'message': '再问一次'}).status_code == 409
+    chat = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    assert chat['id'] == question.json()['id'] and chat['template'] == 'chat'
+    assert chat['requirements'] == 'Reviewer 为什么失败？'
+    assert 'issues.1.suggestion' in chat['summary']['chat_context']
+    ready = client.post(f"/internal/worker/runs/{chat['id']}/finish", headers=headers,
+        json={'worker_id': worker_id, 'generation': chat['generation'],
+              'summary': {'status': 'CHAT_READY', 'answer': 'Reviewer 的输出缺少 suggestion 字段。'}})
+    assert ready.status_code == 200, ready.text
+    messages = client.get(endpoint).json()['messages']
+    assert messages[0]['message'] == 'Reviewer 为什么失败？'
+    assert messages[0]['answer'] == 'Reviewer 的输出缺少 suggestion 字段。'
+    followup = client.post(endpoint, json={'message': '那下一步怎样修复？'})
+    assert followup.status_code == 202
+    second = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    assert second['id'] == followup.json()['id']
+    assert 'Reviewer 的输出缺少 suggestion 字段。' in second['summary']['chat_context']
+    assert client.post(f"/internal/worker/runs/{second['id']}/finish", headers=headers,
+        json={'worker_id': worker_id, 'generation': second['generation'],
+              'summary': {'status': 'CHAT_READY', 'answer': '补全建议并重新审查。'}}).status_code == 200
+    assert len(client.get(endpoint).json()['messages']) == 2
+    assert [run['id'] for run in client.get('/v1/runs', params={'project_id': parent['project_id']}).json()['runs']] == [parent['id']]
+
+
 def test_async_submission_claim_events_artifacts_and_finish(client):
     run = submit(client)
     headers, worker_id = worker(client)

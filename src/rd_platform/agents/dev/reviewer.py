@@ -23,7 +23,7 @@ class ReviewerAgent(GeneratingAgent):
                 data["test_evidence"] = evidence.model_dump()
             if self.generator is None:
                 return self.unavailable()
-            decision = await self.generate(data, ReviewDecision)
+            decision = await self.generate(data, ReviewDecision, repair_format=True)
             files = {**code.files, **code.tests}
             for item in (*decision.issues, *decision.correction_directives):
                 if item.file is not None and item.file not in files:

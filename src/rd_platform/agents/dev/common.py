@@ -1,6 +1,7 @@
 """Shared validation, dependency resolution and structured generation."""
 
 import logging
+import json
 
 from pydantic import ValidationError
 from rd_platform.agents.base import AgentInput, AgentOutput, AgentStatus, BaseAgent
@@ -58,14 +59,31 @@ class GeneratingAgent(BaseAgent):
     def unavailable(self):
         return AgentOutput(status=AgentStatus.BLOCKED, error="artifact generator is not configured")
 
-    async def generate(self, data, schema):
+    async def generate(self, data, schema, *, repair_format=False):
         prompt = GenerationRequest(role=self.metadata.role, system_prompt=PROMPTS[self.metadata.role],
                                    input_data=json_object(data), output_schema=schema.model_json_schema())
         try:
             result = await self.generator.generate(prompt)
             if not isinstance(result, dict):
                 raise ValueError("generator must return a JSON object, not prose or a code fence")
-            return schema.model_validate(json_object(result))
+            try:
+                return schema.model_validate(json_object(result))
+            except ValidationError as error:
+                if not repair_format:
+                    raise
+                # One bounded repair of the model's JSON shape. Semantic and
+                # safety checks still run against the full strict contract.
+                feedback = [{"path": ".".join(map(str, item["loc"])), "type": item["type"]}
+                            for item in error.errors(include_input=False)[:20]]
+                retry = prompt.model_copy(update={
+                    "system_prompt": prompt.system_prompt + "\nYour prior JSON failed schema validation. Return a complete corrected object. Do not omit required fields or add unknown keys.",
+                    "input_data": {**prompt.input_data, "format_feedback": feedback,
+                                   "previous_json_excerpt": json.dumps(result, ensure_ascii=False)[:12000]},
+                })
+                repaired = await self.generator.generate(retry)
+                if not isinstance(repaired, dict):
+                    raise ValueError("repair must return a JSON object")
+                return schema.model_validate(json_object(repaired))
         except (ValidationError, LLMResponseError, ValueError) as exc:
             # Record only the failure class. Model text may contain project data or secrets.
             logger.warning("agent_artifact_rejected role=%s schema=%s error_type=%s",

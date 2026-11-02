@@ -188,6 +188,22 @@ def test_invalid_review_decisions_and_locations_fail(decision):
     assert result.status == AgentStatus.FAILED
 
 
+def test_reviewer_repairs_one_structural_json_error_without_weakening_contract():
+    class RepairGenerator:
+        def __init__(self): self.calls=[]
+        async def generate(self, request):
+            self.calls.append(request)
+            if len(self.calls)==1:
+                return {'review_status':'REJECTED', 'issues':[{'severity':'ERROR','message':'missing bound'}],
+                        'correction_directives':[{'instruction':'add bound'}]}
+            return rejected()
+    backend=RepairGenerator()
+    result=run(dev.ReviewerAgent(backend), {'architecture':architecture(),'code':code()})
+    assert result.status == AgentStatus.COMPLETED
+    assert len(backend.calls)==2
+    assert backend.calls[1].input_data['format_feedback'][0]['path'].endswith('suggestion')
+
+
 def test_correction_input_validates_previous_revision_without_auto_retry():
     backend = FakeGenerator(code())
     payload = {"architecture": architecture(), "previous_code": code(), "review": review(False)}

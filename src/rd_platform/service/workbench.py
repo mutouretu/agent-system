@@ -27,6 +27,10 @@ class RunRequest(StrictModel):
     max_retries: StrictInt = Field(default=3, ge=0, le=3)
 
 
+class ChatRequest(StrictModel):
+    message: str = Field(min_length=1, max_length=4000, pattern=r"\S")
+
+
 class WorkerRequest(StrictModel):
     worker_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
@@ -81,6 +85,14 @@ def install_workbench(app):
     @app.get("/v1/runs/{run_id}")
     def detail(run_id: str, request: Request):
         return translate(store(request).get_run, run_id)
+
+    @app.get("/v1/runs/{run_id}/chat")
+    def chat_history(run_id: str, request: Request):
+        return {"messages": translate(store(request).get_chat, run_id)}
+
+    @app.post("/v1/runs/{run_id}/chat", status_code=202)
+    def send_chat(run_id: str, payload: ChatRequest, request: Request):
+        return translate(store(request).create_chat, run_id, payload.message.strip())
 
     @app.get("/v1/runs/{run_id}/artifacts")
     def artifacts(run_id: str, request: Request):
@@ -146,10 +158,14 @@ def install_workbench(app):
 
     @internal.post("/runs/{run_id}/finish")
     def finish(run_id: str, payload: Finish, request: Request):
+        run = translate(store(request).get_run, run_id)
+        if run['template'] == 'chat':
+            answer = payload.summary.get('answer')
+            if payload.summary.get('status') == 'CHAT_READY' and (not isinstance(answer, str) or not 1 <= len(answer.strip()) <= 8000):
+                raise HTTPException(422, 'chat result requires a bounded answer')
         if payload.summary.get('status') == 'PRD_READY':
             from rd_platform.agents.dev.requirements import RequirementReview
             from pydantic import ValidationError
-            run = translate(store(request).get_run, run_id)
             if run['template'] != 'prd':
                 raise HTTPException(422, 'PRD result requires a requirement analysis job')
             try:
