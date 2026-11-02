@@ -1,5 +1,7 @@
 """Standalone Agent management page and agent-config API contract tests."""
 
+from html.parser import HTMLParser
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -173,3 +175,22 @@ def test_root_page_links_to_agent_management(client):
     assert response.status_code == 200
     assert 'href="/agents"' in response.text
     assert "Agent 管理" in response.text
+
+
+def test_root_page_preserves_dashboard_script_mount_points(client):
+    class IdCollector(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.ids = set()
+
+        def handle_starttag(self, tag, attrs):
+            self.ids.update(value for key, value in attrs if key == 'id')
+
+    page = client.get('/')
+    assert page.status_code == 200
+    collector = IdCollector()
+    collector.feed(page.text)
+    assert {'project-count', 'stat-passed', 'projects', 'delivery-footer', 'new-project',
+            'nav-project-group', 'nav-workspace', 'workspace-execution', 'detail',
+            'workspace-form', 'conversation',
+            'agent-config-dialog'} <= collector.ids
