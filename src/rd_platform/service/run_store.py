@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import json
+import re
 import time
 import uuid
 
@@ -31,6 +32,30 @@ workers = Table("workbench_workers", metadata,
     Column("backends", JSON, nullable=False))
 TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
 LEASE_SECONDS = 90
+
+
+def resume_intent(message):
+    """Recognize only explicit continuation commands; questions remain discussion."""
+    text = message.strip()
+    if re.search(r'[?？]|不要|别|暂不|先不|停止|取消|怎么|如何|为什么|能否|是否|可以|讨论|解释|说明', text):
+        return False
+    return bool(re.search(r'(请|现在|马上|直接|立刻|从).{0,100}(继续|恢复|续跑|重试)', text, re.I)
+                and re.search(r'流程|运行|开发|任务|节点|阶段|review|coder|tester|architect|审查|评审|测试|编码|架构', text, re.I))
+
+
+def resume_task_from_message(message, tasks):
+    explicit = re.search(r'(architect|coder|reviewer|tester)(?:-\d\d)?', message, re.I)
+    if explicit:
+        role = explicit.group(1).lower()
+        match = next((task for task in reversed(tasks) if task['id'].lower() == explicit.group().lower()
+                      or task['id'].lower().startswith(role + '-')), None)
+        return match['id'] if match else None
+    for phrase, capability in [('架构', 'architecture'), ('编码', 'coding'), ('开发', 'coding'),
+                               ('审查', 'review'), ('评审', 'review'), ('测试', 'testing')]:
+        if re.search(r'从.{0,12}' + phrase, message):
+            match = next((task for task in reversed(tasks) if task['capability'] == capability), None)
+            return match['id'] if match else None
+    return None
 
 
 class StoreConflict(ValueError):
@@ -140,6 +165,68 @@ class RunStore:
             self.event(db, record["id"], "run_queued", {"status": "QUEUED", "backend": backend})
         return self.get_run(record["id"])
 
+    def resume_run(self, parent_id, task_id=None):
+        """Queue a child run at a selected role checkpoint, replaying earlier evidence."""
+        now = time.time()
+        with self.transaction() as db:
+            parent = db.execute(select(runs).where(runs.c.id == parent_id).with_for_update()).mappings().first()
+            if parent is None:
+                raise KeyError(parent_id)
+            if parent['template'] not in ('custom', 'resume') or parent['status'] not in ('FAILED', 'INTERRUPTED'):
+                raise StoreConflict('仅支持从失败或中断的研发运行恢复')
+            tasks = parent['tasks']
+            if not tasks:
+                raise StoreConflict('此运行没有可恢复的角色检查点')
+            selected = task_id or next((task['id'] for task in reversed(tasks)
+                                        if task['status'] in ('FAILED', 'BLOCKED')), None)
+            indices = [index for index, task in enumerate(tasks) if task['id'] == selected]
+            if len(indices) != 1:
+                raise StoreConflict('所选角色节点不属于此运行')
+            prefix = tasks[:indices[0]]
+            from rd_platform.agents.dev.schemas import ArchitectArtifacts, CoderArtifacts, ReviewerArtifacts, TesterArtifacts
+            from pydantic import ValidationError
+            try:
+                validators = {'architecture': ArchitectArtifacts, 'coding': CoderArtifacts,
+                              'review': ReviewerArtifacts, 'testing': TesterArtifacts}
+                checked = []
+                for task in prefix:
+                    if task['capability'] not in validators:
+                        raise ValueError('unknown role')
+                    if task['status'] not in ('COMPLETED', 'FAILED', 'BLOCKED'):
+                        raise ValueError('cannot reuse an unfinished role')
+                    output = task.get('output')
+                    if task['status'] == 'COMPLETED' and not output:
+                        raise ValueError('missing completed output')
+                    if output is not None:
+                        output = validators[task['capability']].model_validate(output).model_dump(mode='json')
+                    checked.append({**task, 'output': output})
+            except (ValidationError, ValueError, KeyError):
+                raise StoreConflict('所选节点之前的产物不符合恢复契约') from None
+            children = db.execute(select(runs.c.status, runs.c.summary).where(
+                runs.c.project_id == parent['project_id'], runs.c.template == 'resume')).all()
+            if any(status in ('QUEUED', 'RUNNING') and summary.get('parent_run_id') == parent_id for status, summary in children):
+                raise StoreConflict('此运行已有正在执行的恢复任务')
+            if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(['QUEUED', 'RUNNING']))) >= 100:
+                raise StoreConflict('active run capacity reached (100)')
+            snapshot = parent['summary'].get('agent_config')
+            if parent['backend'] == 'configured' and not snapshot:
+                project = db.scalar(select(projects.c.payload).where(projects.c.id == parent['project_id']))
+                snapshot = project.get('context', {}).get('agent_config') if project else None
+                if not snapshot:
+                    raise StoreConflict('缺少项目 Agent 配置，无法恢复')
+            summary = {'parent_run_id': parent_id, 'resume_from_task': selected,
+                       'resume_seed': {'parent_run_id': parent_id, 'target_task_id': selected, 'tasks': checked}}
+            if snapshot:
+                summary['agent_config'] = snapshot
+            record = dict(id=uuid.uuid4().hex, project_id=parent['project_id'], status='QUEUED',
+                          backend=parent['backend'], requirements=parent['requirements'], template='resume',
+                          max_retries=parent['max_retries'], created_at=now, updated_at=now, generation=0,
+                          tasks=[], summary=summary)
+            db.execute(runs.insert().values(**record))
+            self.event(db, record['id'], 'run_queued', {'status': 'QUEUED', 'parent_run_id': parent_id,
+                                                       'resume_from_task': selected})
+        return self.get_run(record['id'])
+
     def list_runs(self, project_id=None):
         with self.transaction() as db:
             self.expire(db)
@@ -152,6 +239,7 @@ class RunStore:
     def public(record, compact=False):
         record.pop("lease_until", None)
         record.pop("worker_id", None)
+        record['summary'] = {key: value for key, value in record['summary'].items() if key != 'resume_seed'}
         if compact:
             record.pop("tasks", None)
             record.pop("requirements", None)
@@ -181,6 +269,7 @@ class RunStore:
                 raise KeyError(parent_id)
             return [{"id": row['id'], "message": row['requirements'], "status": row['status'],
                      "answer": row['summary'].get('answer'), "error": row['summary'].get('error'),
+                     "resume_run_id": row['summary'].get('resume_run_id'),
                      "created_at": row['created_at']} for row in self._chat_rows(db, parent_id)]
 
     def create_chat(self, parent_id, message):
@@ -194,6 +283,11 @@ class RunStore:
                 raise StoreConflict('上一条讨论仍在处理，请等待回复')
             if len(history) >= 50:
                 raise StoreConflict('本轮讨论已达 50 条上限')
+            action = None
+            if resume_intent(message):
+                if parent['status'] not in ('FAILED', 'INTERRUPTED'):
+                    raise StoreConflict('当前运行尚未失败或中断，无需恢复')
+                action = {'type': 'resume', 'task_id': resume_task_from_message(message, parent['tasks'])}
             if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(['QUEUED', 'RUNNING']))) >= 100:
                 raise StoreConflict('active run capacity reached (100)')
             task_context = [{"role": task.get('capability'), "status": task.get('status'),
@@ -211,6 +305,8 @@ class RunStore:
                 project = db.scalar(select(projects.c.payload).where(projects.c.id == parent['project_id']))
                 snapshot = project.get('context', {}).get('agent_config') if project else None
             summary = {"parent_run_id": parent_id, "chat_context": context_text}
+            if action:
+                summary['action'] = action
             if snapshot:
                 summary['agent_config'] = snapshot
             record = dict(id=uuid.uuid4().hex, project_id=parent['project_id'], status='QUEUED',
@@ -284,7 +380,7 @@ class RunStore:
         with self.transaction() as db:
             row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
             if row:
-                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id')
+                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task')
                               if key in row['summary']}, **summary}
             if row and row["status"] in ("COMPLETED", "FAILED") and row["worker_id"] == worker_id and row["generation"] == generation and row["summary"] == summary:
                 return

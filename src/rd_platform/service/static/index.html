@@ -46,7 +46,7 @@
   </section>
   <section id="detail" class="view hidden">
     <button class="back quiet" id="back">← 返回项目</button>
-    <div class="page-heading detail-heading"><div><div class="eyebrow" id="run-short">RUN</div><h1 id="detail-title">研发运行</h1><p id="detail-subtitle"></p></div><div class="heading-actions"><span id="run-status" class="badge"></span><button class="secondary" id="rerun">重新运行 ↗</button></div></div>
+    <div class="page-heading detail-heading"><div><div class="eyebrow" id="run-short">RUN</div><h1 id="detail-title">研发运行</h1><p id="detail-subtitle"></p></div><div class="heading-actions"><span id="run-status" class="badge"></span><select class="hidden" id="resume-node" aria-label="选择恢复节点"></select><button class="secondary hidden" id="resume-review">从所选节点继续 ↗</button><button class="secondary" id="rerun">重新运行 ↗</button></div></div>
     <div class="run-meta"><span id="run-backend"></span><span id="run-time"></span><span id="run-tests"></span><span id="event-status">实时事件连接中</span></div>
     <div id="run-error" class="error-panel hidden"></div>
     <section class="flow-panel"><div class="section-heading"><h2>团队工作流</h2><span id="iteration-label" class="muted">等待领取</span></div><div id="flow" class="flow"></div><div class="flow-note"><span class="dot green"></span> 测试仅在隔离 Docker 内执行 <span id="acceptance-label"></span></div></section>

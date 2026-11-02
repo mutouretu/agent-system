@@ -5,7 +5,8 @@ from pathlib import Path
 import time
 
 from rd_platform.agents.dev import ArchitectAgent, CoderAgent, ReviewerAgent, TesterAgent
-from rd_platform.domain import Project, Task, TaskInput, TaskStatus
+from rd_platform.domain import Project, Task, TaskInput, TaskOutput, TaskStatus
+from rd_platform.agents.dev.schemas import ArchitectArtifacts, CoderArtifacts, ReviewerArtifacts, TesterArtifacts
 from .agent_registry import AgentRegistry
 from .dispatcher import Dispatcher
 
@@ -27,13 +28,31 @@ class SoftwareTeamWorkflow:
             registry.register(agent)
         self.dispatcher = Dispatcher(registry, task_timeout=task_timeout)
 
-    async def run(self, requirements):
+    async def run(self, requirements, *, resume_seed=None):
         project = Project("Software R&D team", context={"requirements": requirements})
         summary = {"status": "FAILED", "max_retries": self.max_retries, "iteration_count": 0,
                    "attempts": [], "evidence_dir": str(self.directory), "project_id": project.id}
         started = time.monotonic()
 
         async def execute(task):
+            checkpoint = next((saved for saved in (resume_seed or {}).get('tasks', []) if saved['id'] == task.id), None)
+            if checkpoint is not None and task.id != resume_seed['target_task_id']:
+                validators = {'architecture': ArchitectArtifacts, 'coding': CoderArtifacts,
+                              'review': ReviewerArtifacts, 'testing': TesterArtifacts}
+                output = checkpoint.get('output')
+                if output is not None:
+                    output = validators[task.capability].model_validate(output).model_dump(mode='json')
+                restored = Task(task.name, task.capability, id=task.id,
+                                input=TaskInput(checkpoint.get('input') or task.input.data),
+                                depends_on=task.depends_on, status=TaskStatus(checkpoint['status']),
+                                output=TaskOutput(output) if output is not None else None,
+                                error=checkpoint.get('error'), agent_id=checkpoint.get('agent_id'),
+                                logs=checkpoint.get('logs'))
+                project.add_task(restored)
+                save(self.directory / f"{task.id}.json", {**restored.to_dict(), 'restored': True})
+                if self.on_event is not None:
+                    await self.on_event('task_finished', {**restored.to_dict(), 'restored': True})
+                return restored
             project.add_task(task)
             print(f"Role {task.capability}: {task.id}", flush=True)
             if self.on_event is not None:
@@ -47,6 +66,9 @@ class SoftwareTeamWorkflow:
             return task
 
         try:
+            if resume_seed is not None:
+                summary['resumed_from'] = resume_seed.get('parent_run_id')
+                summary['resume_from_task'] = resume_seed['target_task_id']
             architect = await execute(Task("Architecture", "architecture", id="architect", input=TaskInput({"requirements": requirements})))
             if architect.status != TaskStatus.COMPLETED:
                 summary["error"] = architect.error

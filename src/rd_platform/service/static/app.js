@@ -268,7 +268,7 @@ function renderProject() {
   $('project-runs').replaceChildren();
   for(const run of runs) {
     const row=node('tr'), identity=node('td','project-identity'), status=node('td'), action=node('td');
-    identity.append(node('span','mono',run.id.slice(0,8)),node('small','',run.template==='lru' ? 'LRU Cache · 固定验收' : '自定义 Python'));
+    identity.append(node('span','mono',run.id.slice(0,8)),node('small','',run.template==='lru' ? 'LRU Cache · 固定验收' : run.template==='resume' ? '从 Reviewer 恢复' : '自定义 Python'));
     status.append(badge(run.status)); const tests=run.summary?.final_test_summary;
     const button=node('button','table-action','运行详情 →'); button.setAttribute('aria-label',`运行详情：${run.id.slice(0,8)}`); button.addEventListener('click',()=>openRun(run.id)); action.append(button);
     row.append(identity,status,node('td','',backendLabel(run.backend)),node('td','mono',tests?.counts ? `${tests.counts.passed} / ${tests.total}` : '—'),node('td','mono',stamp(run.created_at)),action); $('project-runs').append(row);
@@ -288,7 +288,7 @@ async function loadRun(id) {
   state.stream?.close(); state.stream=null; state.current=null; ++state.revision;
   $('detail').classList.remove('hidden');
   state.events=[]; state.file=null; state.artifacts=[]; state.chat=[];
-  $('detail-title').textContent='加载运行…'; $('rerun').disabled=true; $('download').disabled=true;
+  $('detail-title').textContent='加载运行…'; $('rerun').disabled=true; $('resume-review').classList.add('hidden'); $('resume-node').classList.add('hidden'); $('download').disabled=true;
   $('flow').replaceChildren(); $('artifact-files').replaceChildren(); $('timeline').replaceChildren();
   for(const key of ['detail-subtitle','run-short','run-status','run-backend','run-time','run-tests','code-title','code-content','log-content','requirements-content']) $(key).textContent='';
   $('run-error').classList.add('hidden'); $('run-history')?.replaceChildren(); selectTab('artifacts');
@@ -345,6 +345,18 @@ function renderRun() {
   for(const item of history) { const option=node('option','',`${stamp(item.created_at)} · ${labels[item.status]}`); option.value=item.id; historySelect.append(option); }
   historySelect.value=run.id;
   $('rerun').disabled = !terminal(run.status);
+  const checkpoint = ['custom','resume'].includes(run.template) && ['FAILED','INTERRUPTED'].includes(run.status) && run.tasks.length>0;
+  $('resume-review').classList.toggle('hidden',!checkpoint);
+  $('resume-node').classList.toggle('hidden',!checkpoint);
+  $('resume-review').disabled=!checkpoint;
+  if(checkpoint) {
+    const select=$('resume-node'); select.replaceChildren();
+    for(const task of run.tasks) {
+      const label=roles.find(item=>item[0]===task.capability)?.[1] || task.capability;
+      const option=node('option','',`${label} · ${task.id}`); option.value=task.id; select.append(option);
+    }
+    select.value=[...run.tasks].reverse().find(task=>['FAILED','BLOCKED'].includes(task.status))?.id || run.tasks.at(-1).id;
+  }
   const test=run.summary.final_test_summary || [...run.tasks].reverse().find(task => task.capability==='testing')?.output?.test_summary;
   $('run-tests').textContent = test?.counts ? `${test.counts.passed}/${test.total} 测试通过` : '等待测试证据';
   $('iteration-label').textContent = run.summary.iteration_count !== undefined ? `${run.summary.iteration_count} 次修订 · ${run.summary.elapsed_seconds?.toFixed(1) || '—'} s` : `${run.tasks.length} 个角色任务 · 最多 ${run.max_retries} 次修订`;
@@ -405,7 +417,7 @@ function renderWorkspace() {
   const active=state.projectRuns.some(item=>['QUEUED','RUNNING'].includes(item.status));
   $('workspace-submit').disabled=submittingWorkspace || active || !state.project;
   if(chatButton) chatButton.disabled=!run || submittingChat;
-  $('workspace-note').textContent=active ? '团队正在执行；可以留言讨论当前运行，回复可能排队到当前阶段结束。启动新需求会创建独立运行。' : '询问当前运行会保留本轮上下文；启动新需求会创建独立运行，不继承上轮代码。';
+  $('workspace-note').textContent=active ? '团队正在执行；可向 Team Lead 追问本轮进展。启动新需求会创建独立运行。' : '向 Team Lead 提问会保留本轮上下文；明确要求继续失败运行时会从检查点恢复。启动新需求会创建独立运行。';
   const history=$('workspace-history'); history.replaceChildren();
   if(!state.projectRuns.length) history.append(node('option','','暂无执行记录'));
   for(const item of state.projectRuns) { const option=node('option','',`${stamp(item.created_at)} · ${item.id.slice(0,8)} · ${labels[item.status]}`); option.value=item.id; history.append(option); }
@@ -540,6 +552,20 @@ $('project-refresh').addEventListener('click',()=>openProject(state.project.id,f
 $('close-dialog').addEventListener('click',()=>$('create-dialog').close());
 $('refresh').addEventListener('click',()=>refreshOverview().catch(error=>notice(error.message)));
 $('rerun').addEventListener('click',()=>{ $('workspace-requirements').value=state.current.requirements; $('workspace-requirements').focus(); $('workspace-form').scrollIntoView({behavior:'smooth',block:'center'}); });
+$('resume-review').addEventListener('click',async()=>{
+  const run=state.current;
+  if(!run) return;
+  $('resume-review').disabled=true;
+  try {
+    const taskId=$('resume-node').value;
+    const resumed=await api(`/v1/runs/${run.id}/resume`,{method:'POST',body:JSON.stringify({task_id:taskId})});
+    await openProject(run.project_id,true,resumed.id);
+    notice(`已创建恢复运行：从 ${taskId} 节点继续。`);
+  } catch(error) {
+    $('resume-review').disabled=false;
+    notice(error.message);
+  }
+});
 document.querySelectorAll('[data-template]').forEach(button=>button.addEventListener('click',()=>setTemplate(button.dataset.template)));
 document.querySelectorAll('[data-tab]').forEach(button=>button.addEventListener('click',()=>selectTab(button.dataset.tab)));
 $('download').addEventListener('click',()=>{
@@ -571,11 +597,11 @@ const leadMessages=node('div'); leadMessages.id='lead-messages'; leadMessages.se
 leadPanel.append(leadMessages,$('workspace-form'));
 document.querySelector('.workspace-grid').after(leadPanel);
 squadPanel.querySelector('h2').textContent='多 Agent 团队对话';
-chatButton=node('button','secondary','询问当前运行'); chatButton.type='button'; chatButton.disabled=true;
+chatButton=node('button','secondary','发送给 Team Lead'); chatButton.type='button'; chatButton.disabled=true;
 $('workspace-submit').before(chatButton);
 $('workspace-submit').textContent='启动新需求 →';
-$('workspace-form').querySelector('label[for="workspace-requirements"]').textContent='新需求或当前运行的追问';
-$('workspace-requirements').placeholder='输入新研发需求，或询问当前运行的失败原因与进展…';
+$('workspace-form').querySelector('label[for="workspace-requirements"]').textContent='新需求、当前运行的追问或续跑指令';
+$('workspace-requirements').placeholder='询问失败原因，或输入“请继续刚才中断的流程”…';
 chatButton.addEventListener('click',async()=>{
   const runId=state.current?.id, message=$('workspace-requirements').value.trim();
   if(!runId) { $('workspace-error').textContent='请先选择一条运行记录。'; return; }
@@ -638,7 +664,7 @@ function renderProductWorkspace() {
   const architecture=[...tasks].reverse().find(t=>t.capability==='architecture' && t.output?.architecture_spec)?.output;
   const latest=tasks.at(-1), role=roles.find(r=>r[0]===latest?.capability)?.[1];
   const failedReview=run?.status==='FAILED' && latest?.capability==='review' && latest?.error?.includes('ValidationError');
-  const lead=run?.status==='COMPLETED'?'团队已完成本轮实现与自动化验证。请检查右侧交付物，逐项确认业务验收标准。':run?.status==='QUEUED'?'需求已接收，正在等待团队领取。':run?.status==='RUNNING'?`团队正在推进${role || '研发'}阶段。审查或验证发现的问题将在本轮内交回开发者修订。`:failedReview?'Reviewer 的结构化输出未通过格式校验，本轮已停止。可在下方询问当前运行，查看具体原因。':run?'本轮研发需要跟进。可询问当前运行了解原因，或展开技术证据。':'请描述业务目标、功能范围和验收标准，我将通过现有调度流程交给研发团队。';
+  const lead=run?.status==='COMPLETED'?'团队已完成本轮实现与自动化验证。请检查右侧交付物，逐项确认业务验收标准。':run?.status==='QUEUED'?'需求已接收，正在等待团队领取。':run?.status==='RUNNING'?`团队正在推进${role || '研发'}阶段。审查或验证发现的问题将在本轮内交回开发者修订。`:failedReview?'Reviewer 的结构化输出未通过格式校验，本轮已停止。可在下方要求继续流程，或在运行详情中选择恢复节点。':run?'本轮研发需要跟进。可向 Team Lead 询问原因，或选择节点继续。':'请描述业务目标、功能范围和验收标准，我将通过现有调度流程交给研发团队。';
   $('lead-messages').replaceChildren();
   if(run) { const request=node('article','message user-message'); request.append(node('strong','','你 · 本轮需求'),node('p','message-content',businessRequirementText(run.requirements))); $('lead-messages').append(request); }
   const report=node('article','message lead-message'); report.append(node('strong','','Team Lead · 状态汇总'),node('p','',lead)); $('lead-messages').append(report);
@@ -648,7 +674,12 @@ function renderProductWorkspace() {
     $('lead-messages').append(question);
     const reply=node('article','message lead-message');
     const answer=item.answer || (item.status==='FAILED' ? item.error || '回复失败，请重试。' : 'Team Lead 正在整理本轮上下文，等待回复…');
-    reply.append(node('strong','',`Team Lead · ${item.status==='COMPLETED'?'回复':item.status==='FAILED'?'回复失败':'处理中'}`),node('p','message-content',answer));
+    reply.append(node('strong','',`Team Lead · ${item.resume_run_id?'已启动恢复':item.status==='COMPLETED'?'回复':item.status==='FAILED'?'回复失败':'处理中'}`),node('p','message-content',answer));
+    if(item.resume_run_id) {
+      const link=node('button','table-action','进入恢复运行 →');
+      link.addEventListener('click',()=>openProject(state.project.id,true,item.resume_run_id));
+      reply.append(link);
+    }
     $('lead-messages').append(reply);
   }
   const userCard=$('conversation').querySelector('.user-message'); userCard?.remove();

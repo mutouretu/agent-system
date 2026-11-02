@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from rd_platform.service.api import Settings, create_app
-from rd_platform.service.run_store import RunStore, StoreConflict, runs
+from rd_platform.service.run_store import RunStore, StoreConflict, runs, resume_intent
 
 
 @pytest.fixture
@@ -38,6 +38,35 @@ def worker(client, worker_id="a" * 32):
     headers = {"X-Worker-Token": client.app.state.worker_token}
     assert client.post("/internal/worker/heartbeat", json={"worker_id": worker_id, "backends": ["codex"]}, headers=headers).status_code == 200
     return headers, worker_id
+
+
+def test_resume_chat_intent_requires_an_explicit_command():
+    assert resume_intent('我已修改了review格式的问题，请继续刚才中断的流程')
+    assert resume_intent('请从 Tester 阶段继续运行')
+    assert not resume_intent('为什么 Reviewer 失败？请解释如何继续')
+    assert not resume_intent('暂不继续运行，先讨论原因')
+
+
+def test_worker_resume_chat_enqueues_without_calling_model(tmp_path):
+    from scripts.workbench_worker import Worker
+
+    class Response:
+        status_code = 202
+
+        def json(self):
+            return {'id': 'b' * 32, 'summary': {'resume_from_task': 'reviewer-00'}}
+
+    posted = []
+    worker_instance = Worker.__new__(Worker)
+    worker_instance.directory = tmp_path
+    worker_instance.client = type('Client', (), {'post': lambda self, path, json: (posted.append((path, json)), Response())[1]})()
+    worker_instance.post = lambda path, **data: posted.append((path, data))
+    job = {'id': 'c' * 32, 'generation': 1,
+           'summary': {'parent_run_id': 'a' * 32, 'action': {'type': 'resume', 'task_id': None}}}
+    worker_instance.run_chat(job)
+    assert posted[0] == (f"/v1/runs/{'a' * 32}/resume", {'task_id': None})
+    assert posted[1][0].endswith('/finish')
+    assert posted[1][1]['summary']['resume_run_id'] == 'b' * 32
 
 
 def test_project_run_persistence_across_restart(settings):
@@ -140,6 +169,56 @@ def test_run_discussion_keeps_parent_context_and_never_creates_feature_run(clien
               'summary': {'status': 'CHAT_READY', 'answer': '补全建议并重新审查。'}}).status_code == 200
     assert len(client.get(endpoint).json()['messages']) == 2
     assert [run['id'] for run in client.get('/v1/runs', params={'project_id': parent['project_id']}).json()['runs']] == [parent['id']]
+
+
+@pytest.mark.parametrize('resume_task,prefix_length', [('architect', 0), ('coder-00', 1), ('reviewer-00', 2)])
+def test_resume_review_queues_checkpoint_without_mutating_parent(client, resume_task, prefix_length):
+    architecture = {'architecture_spec': {'modules': [{'name': 'cache', 'responsibility': 'store'}],
+                    'data_flow': ['input to output']}, 'api_contracts': {'cache': {'type': 'object'}},
+                    'subtasks': [{'id': 'code', 'description': 'implement', 'acceptance_criteria': ['works']}]}
+    code = {'files': {'src/cache.py': 'def get(): return 1\n'},
+            'tests': {'tests/test_cache.py': 'def test_get(): assert True\n'},
+            'commit_message': 'implement'}
+
+    parent = submit(client)
+    headers, worker_id = worker(client)
+    claimed = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    path = f"/internal/worker/runs/{parent['id']}"
+    for task_id, capability, output, status in [
+        ('architect', 'architecture', architecture, 'COMPLETED'),
+        ('coder-00', 'coding', code, 'COMPLETED'),
+        ('reviewer-00', 'review', None, 'FAILED')]:
+        response = client.post(path + '/events', headers=headers,
+            json={'worker_id': worker_id, 'generation': claimed['generation'], 'kind': 'task_finished',
+                  'task': {'id': task_id, 'capability': capability, 'status': status, 'output': output}})
+        assert response.status_code == 200, response.text
+    assert client.post(path + '/finish', headers=headers,
+        json={'worker_id': worker_id, 'generation': claimed['generation'],
+              'summary': {'status': 'FAILED', 'error': 'Reviewer schema failure'}}).status_code == 200
+    chat_response = client.post(f"/v1/runs/{parent['id']}/chat",
+        json={'message': '我已修改了review格式的问题，请继续刚才中断的流程'})
+    assert chat_response.status_code == 202, chat_response.text
+    action_job = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    assert action_job['template'] == 'chat'
+    assert action_job['summary']['action'] == {'type': 'resume', 'task_id': None}
+    assert client.post(f"/internal/worker/runs/{action_job['id']}/finish", headers=headers,
+        json={'worker_id': worker_id, 'generation': action_job['generation'],
+              'summary': {'status': 'CHAT_READY', 'answer': '恢复入口已准备。'}}).status_code == 200
+    assert client.post(f"/v1/runs/{parent['id']}/resume", json={'task_id': 'unknown'}).status_code == 409
+    response = client.post(f"/v1/runs/{parent['id']}/resume", json={'task_id': resume_task})
+    assert response.status_code == 202, response.text
+    child = response.json()
+    assert child['template'] == 'resume' and child['status'] == 'QUEUED'
+    assert child['summary']['parent_run_id'] == parent['id']
+    assert 'resume_seed' not in child['summary']
+    assert client.get(f"/v1/runs/{parent['id']}").json()['status'] == 'FAILED'
+    assert client.post(f"/v1/runs/{parent['id']}/resume", json={}).status_code == 409
+    next_claim = client.post('/internal/worker/claim', json={'worker_id': worker_id}, headers=headers).json()['run']
+    assert next_claim['id'] == child['id']
+    assert next_claim['summary']['resume_seed']['target_task_id'] == resume_task
+    assert len(next_claim['summary']['resume_seed']['tasks']) == prefix_length
+    if prefix_length == 2:
+        assert next_claim['summary']['resume_seed']['tasks'][1]['output'] == code
 
 
 def test_async_submission_claim_events_artifacts_and_finish(client):

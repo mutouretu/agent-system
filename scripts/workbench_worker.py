@@ -179,7 +179,10 @@ class Worker:
 
             workflow = SoftwareTeamWorkflow(generator, executor, directory / "workflow", max_retries=job["max_retries"],
                                             on_event=event)
-            summary = asyncio.run(workflow.run(requirements))
+            seed = job.get('summary', {}).get('resume_seed') if job['template'] == 'resume' else None
+            if job['template'] == 'resume' and not isinstance(seed, dict):
+                raise ValueError('resume run has no checkpoint artifacts')
+            summary = asyncio.run(workflow.run(requirements, resume_seed=seed))
             summary["calls"] = [{key: value for key, value in call.items() if key in ("role", "elapsed_seconds", "token_usage", "status")}
                                 for call in generator.calls]
             summary["acceptance"] = "fixed_lru" if acceptance else "generated_tests_only"
@@ -194,9 +197,28 @@ class Worker:
         self.post(f"/runs/{job['id']}/finish", generation=job["generation"], summary=summary)
 
     def run_chat(self, job):
-        """Answer inside the original run's discussion; never launch code or tests."""
+        """Answer discussion or enqueue an explicit checkpoint continuation."""
         directory = self.directory / job['id']
         directory.mkdir(exist_ok=True)
+        action = job.get('summary', {}).get('action')
+        if isinstance(action, dict) and action.get('type') == 'resume':
+            try:
+                parent_id = job['summary']['parent_run_id']
+                response = self.client.post(f'/v1/runs/{parent_id}/resume',
+                    json={'task_id': action.get('task_id')})
+                if response.status_code != 202:
+                    detail = response.json().get('detail', '恢复请求未被接受')
+                    raise RuntimeError(str(detail))
+                resumed = response.json()
+                task_id = resumed['summary']['resume_from_task']
+                summary = {'status': 'CHAT_READY', 'resume_run_id': resumed['id'],
+                           'answer': f'已从 {task_id} 节点创建恢复运行 {resumed["id"][:8]}。之前完成的产物会复用，后续阶段由研发团队继续执行。'}
+            except Exception as exc:
+                summary = {'status': 'FAILED', 'error': f'{type(exc).__name__}: 恢复运行失败，请在运行详情中手动选择节点重试'}
+            summary['evidence_dir'] = str(directory)
+            save(directory / 'summary.json', summary)
+            self.post(f"/runs/{job['id']}/finish", generation=job['generation'], summary=summary)
+            return
         try:
             backend = job['backend']
             model = None

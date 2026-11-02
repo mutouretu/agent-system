@@ -62,6 +62,48 @@ def test_successful_workflow_records_all_roles(tmp_path):
     assert all(task["status"] == "COMPLETED" for task in project["tasks"])
 
 
+def test_resume_reuses_architecture_and_code_then_reviews_and_tests(tmp_path):
+    generator, executor = FakeGenerator(), FakeExecutor()
+    events = []
+
+    async def on_event(kind, task):
+        events.append((kind, task['id']))
+
+    seed = {'parent_run_id': 'original', 'target_task_id': 'reviewer-00', 'tasks': [
+        {'id': 'architect', 'status': 'COMPLETED', 'output': ARCHITECTURE},
+        {'id': 'coder-00', 'status': 'COMPLETED', 'output': CODE}]}
+    result = asyncio.run(SoftwareTeamWorkflow(generator, executor, tmp_path, on_event=on_event)
+                         .run('implement cache', resume_seed=seed))
+    assert result['status'] == 'PASS' and result['resumed_from'] == 'original'
+    assert [call.role.value for call in generator.calls] == ['REVIEWER']
+    assert executor.calls == 1
+    assert events[:2] == [('task_finished', 'architect'), ('task_finished', 'coder-00')]
+    project = json.loads((tmp_path / 'project.json').read_text())
+    assert [task['id'] for task in project['tasks']] == ['architect', 'coder-00', 'reviewer-00', 'tester-00']
+
+
+@pytest.mark.parametrize('target,expected_roles', [
+    ('architect', ['ARCHITECT', 'CODER', 'REVIEWER']),
+    ('coder-00', ['CODER', 'REVIEWER']),
+    ('reviewer-00', ['REVIEWER']),
+    ('tester-00', []),
+])
+def test_resume_at_any_first_iteration_role(tmp_path, target, expected_roles):
+    from rd_platform.agents.dev.schemas import CoderArtifacts, ReviewerArtifacts
+    review = ReviewerArtifacts(review_status='APPROVED', code_digest=code_digest(CoderArtifacts.model_validate(CODE))).model_dump()
+    saved = [
+        {'id': 'architect', 'status': 'COMPLETED', 'output': ARCHITECTURE},
+        {'id': 'coder-00', 'status': 'COMPLETED', 'output': CODE},
+        {'id': 'reviewer-00', 'status': 'COMPLETED', 'output': review},
+    ]
+    seed = {'parent_run_id': 'original', 'target_task_id': target,
+            'tasks': saved[:[item['id'] for item in saved].index(target)] if target != 'tester-00' else saved}
+    generator, executor = FakeGenerator(), FakeExecutor()
+    result = asyncio.run(SoftwareTeamWorkflow(generator, executor, tmp_path).run('cache', resume_seed=seed))
+    assert result['status'] == 'PASS' and executor.calls == 1
+    assert [call.role.value for call in generator.calls] == expected_roles
+
+
 def test_review_rejection_revises_before_testing(tmp_path):
     generator, executor = FakeGenerator(reject_first=True), FakeExecutor()
     result = asyncio.run(SoftwareTeamWorkflow(generator, executor, tmp_path).run("implement cache"))
