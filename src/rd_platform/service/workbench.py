@@ -21,6 +21,7 @@ class StrictModel(BaseModel):
 
 class RunRequest(StrictModel):
     project_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    work_item_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     requirements: str = Field(min_length=1, max_length=16000, pattern=r"\S")
     backend: Literal["codex", "llm", "mixed", "configured"] = "codex"
     template: Literal["custom", "lru"] = "custom"

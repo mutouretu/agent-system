@@ -28,6 +28,10 @@ def test_prd_save_scope_conflict_and_submit(client):
     assert result.status_code == 202, result.text
     run = client.get('/v1/runs/'+result.json()['run_id']).json()
     assert run['template'] == 'custom' and run['status'] == 'QUEUED'
+    assert run['summary']['requirement_id'] == req['id']
+    assert run['summary']['work_item_id'] == result.json()['work_item_id']
+    items = client.get(path+'/work-items').json()['work_items']
+    assert len(items) == 1 and items[0]['kind'] == 'FEATURE'
     context = client.get('/v1/projects/'+project['id']).json()['context']
     assert context['workspace']['milestones'][0]['run_id'] == run['id']
     assert context['active_requirement']['accepted'] == payload['accepted']

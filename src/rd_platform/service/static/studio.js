@@ -2,10 +2,16 @@
 let studio=null, studioBusy=false, studioFilter='ALL', studioDirty=false, studioPoll=null;
 const studioView=node('section','view hidden'); studioView.id='requirement-studio';
 document.querySelector('main>footer').before(studioView);
-const studioBack=node('button','quiet','← 返回项目开发'); studioBack.addEventListener('click',()=>{if(studio) openProject(studio.project_id);});
+const studioBack=node('button','quiet','← 返回项目概览'); studioBack.addEventListener('click',()=>{if(studioDirty){studioMessage.textContent='请先保存当前需求草稿。';return;}if(studio)openProject(studio.project_id);});
 const studioHeading=node('div','page-heading'); const studioIdentity=node('div'); studioIdentity.append(node('div','eyebrow','REQUIREMENT STUDIO'),node('h1','','需求定义与 PRD 拆解'));
 const studioActions=node('div','heading-actions');
 const studioSave=node('button','secondary','保存草稿'), studioSubmit=node('button','primary','提交给 Team Lead 执行 →'); studioActions.append(studioSave,studioSubmit); studioHeading.append(studioIdentity,studioActions);
+const studioScope=node('section','studio-panel requirement-scope');
+const studioScopeHeading=node('div','section-heading'); studioScopeHeading.append(node('h2','','所属需求'));
+const studioSelectLabel=node('label','','切换需求'); const studioSelect=node('select'); studioSelect.id='studio-requirement-select'; studioSelectLabel.append(studioSelect);
+const studioNewRequirement=node('button','secondary','＋ 新建需求');
+studioScopeHeading.append(studioSelectLabel,studioNewRequirement);
+studioScope.append(studioScopeHeading,node('p','field-note','同一需求下保存连续对话，功能、变更与 Debug 各自作为开发项执行。'));
 const studioMessage=node('p','field-note'); studioMessage.id='studio-message'; studioMessage.setAttribute('role','status');
 const copilot=node('section','studio-copilot'); copilot.append(node('div','eyebrow','ARCHITECT COPILOT'),node('h2','','AI 需求助手 & 原始文本导入'));
 const chat=node('div','studio-chat'); chat.id='studio-chat';
@@ -18,24 +24,31 @@ const filters=node('div','studio-filters'); for(const [value,text] of [['ALL','�
 const addPackage=node('button','table-action','＋ 添加功能包');addPackage.addEventListener('click',()=>{studio.document.feature_packages.push({id:'PKG-'+crypto.randomUUID().slice(0,8),name:'',description:'',priority:'P1',group:'新模块'});studioChanged();renderPackages();});packageHead.append(filters,addPackage);
 const packageList=node('div');packageList.id='studio-packages';packagePanel.append(packageHead,packageList);
 const criteriaPanel=node('section','studio-panel');criteriaPanel.append(node('h2','','业务验收条件'),node('p','field-note','勾选代表人工验收确认；保存后同步项目交付面板。AI 不会替你确认。'));
-const criteriaList=node('div');criteriaList.id='studio-criteria'; const addCriterion=node('button','table-action','＋ 添加验收条件'); addCriterion.addEventListener('click',()=>{studio.document.acceptance_criteria.push('');studioChanged();renderCriteria();});criteriaPanel.append(criteriaList,addCriterion);studioMain.append(packagePanel,criteriaPanel);
+const criteriaList=node('div');criteriaList.id='studio-criteria'; const addCriterion=node('button','table-action','＋ 添加验收条件'); addCriterion.addEventListener('click',()=>{studio.document.acceptance_criteria.push('');studioChanged();renderCriteria();});criteriaPanel.append(criteriaList,addCriterion);
+const workItemsPanel=node('section','studio-panel work-items-panel');
+workItemsPanel.append(node('div','section-heading'));
+workItemsPanel.querySelector('.section-heading').append(node('h2','','开发项列表'),node('span','muted','功能 / 变更 / Debug · 点击进入单项开发'));
+const workItemList=node('div','work-item-list'); workItemList.id='work-item-list'; workItemsPanel.append(workItemList);
+studioMain.append(workItemsPanel,leadPanel,packagePanel,criteriaPanel);
 const metadataPanel=node('section','studio-panel'); const reqId=node('p','mono');reqId.id='studio-id'; metadataPanel.append(node('h2','','需求元数据'),reqId);
 for(const [id,text,tag] of [['studio-title','需求名称','input'],['studio-context','核心业务目标','textarea']]){ const label=node('label','',text),field=node(tag);field.id=id;field.maxLength=id==='studio-title'?512:4000;if(tag==='textarea')field.rows=6;field.addEventListener('input',()=>{studio.document[id==='studio-title'?'title':'business_context']=field.value;studioChanged();});label.append(field);metadataPanel.append(label); }
 const reviewPanel=node('section','studio-panel studio-review'); reviewPanel.append(node('h2','','Architect 智能审校'));
 const score=node('strong','studio-score'), risks=node('ul'), reviewNote=node('p','field-note','填写完整度为本地规则检查；AI 审校以最近一次 Architect 回复为准。');
-const boundaryButton=node('button','secondary','一键补全边界用例');reviewPanel.append(score,reviewNote,risks,boundaryButton);studioAside.append(metadataPanel,reviewPanel);studioLayout.append(studioMain,studioAside);studioView.append(studioBack,studioHeading,studioMessage,copilot,studioLayout);
+const boundaryButton=node('button','secondary','一键补全边界用例');reviewPanel.append(score,reviewNote,risks,boundaryButton);studioAside.append(metadataPanel,reviewPanel);studioLayout.append(studioMain,studioAside);studioView.append(studioBack,studioHeading,studioScope,studioMessage,copilot,studioLayout);
 function emptyPRD(){return {title:'',business_context:'',feature_packages:[],acceptance_criteria:[]};}
 function studioChanged(){studioDirty=true;studioMessage.textContent='有未保存修改';renderStudioReview();}
-function setStudioBusy(value){studioBusy=value;for(const button of [studioSave,studioSubmit,parseButton,boundaryButton,addPackage,addCriterion])button.disabled=value; studioView.querySelectorAll('input,textarea,select').forEach(field=>field.disabled=value);}
+function setStudioBusy(value){studioBusy=value;for(const button of [studioSave,studioSubmit,studioNewRequirement,parseButton,boundaryButton,addPackage,addCriterion])button.disabled=value; studioView.querySelectorAll('input,textarea,select').forEach(field=>field.disabled=value);}
 async function openRequirementEntry(projectId){
-  try {const list=await api(`/v1/projects/${projectId}/requirements`);const latest=list.requirements.at(-1);const req=latest || await api(`/v1/projects/${projectId}/requirements`,{method:'POST'});await openStudio(projectId,req.id); }catch(error){notice(error.message);}
+  try {const list=await api(`/v1/projects/${projectId}/requirements`);const latest=[...list.requirements].reverse().find(item=>item.kind!=='legacy');const req=latest || await api(`/v1/projects/${projectId}/requirements`,{method:'POST'});await openStudio(projectId,req.id); }catch(error){notice(error.message);}
 }
 async function openStudio(projectId,reqId,push=true){
   if(studioDirty && state.view==='requirement-studio') {notice('请先保存当前需求草稿再切换。');return;}
   const navigation=switchView('requirement-studio',`#requirements/${projectId}/${reqId}`,push);
   clearTimeout(studioPoll); studio=null;studioMessage.textContent='正在加载需求…';setStudioBusy(true);
-  try {const [req,project]=await Promise.all([api(`/v1/projects/${projectId}/requirements/${reqId}`),api(`/v1/projects/${projectId}`)]);if(navigation!==state.navigation)return;
-    studio={...req,document:req.document || emptyPRD()};state.project=project;studioDirty=false;studioFilter='ALL';raw.value='';studioBackend.value=project.context?.preferred_backend==='mixed'?'mixed':project.context?.preferred_backend==='llm'?'llm':'codex';$('breadcrumb-current').textContent='需求管理 / PRD 工作台';renderStudio();studioMessage.textContent=`已加载草稿 · 版本 ${studio.revision}`;setStudioBusy(false);
+  try {const [req,project,requirementList,history]=await Promise.all([api(`/v1/projects/${projectId}/requirements/${reqId}`),api(`/v1/projects/${projectId}`),api(`/v1/projects/${projectId}/requirements`),api(`/v1/runs?project_id=${projectId}`)]);if(navigation!==state.navigation)return;
+    studio={...req,document:req.document || emptyPRD()};state.project=project;state.projectRuns=history.runs;state.requirements=requirementList.requirements;state.selectedRequirementId=reqId;state.selectedWorkItemId=null;state.current=null;studioDirty=false;studioFilter='ALL';raw.value='';studioBackend.value=project.context?.preferred_backend==='mixed'?'mixed':project.context?.preferred_backend==='llm'?'llm':'codex';$('workspace-backend').value=project.context?.agent_config?'configured':project.context?.preferred_backend==='llm'?'llm':project.context?.preferred_backend==='cli'?'codex':'mixed';$('breadcrumb-current').textContent='需求管理 / PRD 工作台';renderStudio();studioMessage.textContent=`已加载草稿 · 版本 ${studio.revision}`;setStudioBusy(false);
+    studioSelect.replaceChildren(); for(const item of state.requirements){const option=node('option','',requirementTitleFromRecord(item));option.value=item.id;studioSelect.append(option);} studioSelect.value=reqId;
+    await refreshRequirementData(reqId);
     if(req.analysis_id) pollAnalysis(req.analysis_id,navigation);
   }catch(error){if(navigation===state.navigation){studioMessage.textContent=error.message;}}
 }
@@ -80,7 +93,7 @@ async function saveStudio(submit=false){
     const payload=studioPayload();if(submit)payload.backend=studioBackend.value;
     const result=await api(`/v1/projects/${studio.project_id}/requirements/${studio.id}${submit?'/submit':''}`,{method:submit?'POST':'PUT',body:JSON.stringify(payload)});
     if(navigation!==state.navigation)return;studio=result;studioDirty=false;renderStudio();studioMessage.textContent='草稿已保存，验收条件已同步至项目工作区。';
-    if(submit){await openProject(result.project_id,true,result.run_id);}
+    if(submit){await openWorkItem(result.project_id,result.id,result.work_item_id,true,result.run_id);}
   }catch(error){if(navigation===state.navigation)studioMessage.textContent=error.message;}finally{setStudioBusy(false);}
 }
 studioSave.addEventListener('click',()=>saveStudio());studioSubmit.addEventListener('click',()=>saveStudio(true));
@@ -103,5 +116,8 @@ async function pollAnalysis(id,navigation){
   }catch(error){if(navigation===state.navigation){studioMessage.textContent=error.message;setStudioBusy(false);}}
 }
 parseButton.addEventListener('click',()=>analyzeStudio());boundaryButton.addEventListener('click',()=>analyzeStudio(true));
+studioSelect.addEventListener('change',()=>{const next=studioSelect.value;if(studioDirty){studioSelect.value=studio.id;studioMessage.textContent='请先保存当前需求草稿再切换。';return;}openStudio(studio.project_id,next);});
+studioNewRequirement.addEventListener('click',async()=>{if(studioDirty){studioMessage.textContent='请先保存当前需求草稿。';return;}try{const req=await api(`/v1/projects/${studio.project_id}/requirements`,{method:'POST'});await openStudio(studio.project_id,req.id);}catch(error){studioMessage.textContent=error.message;}});
 raw.addEventListener('input',studioChanged);
 window.addEventListener('beforeunload',event=>{if(studioDirty&&state.view==='requirement-studio'){event.preventDefault();event.returnValue='';}});
+init();

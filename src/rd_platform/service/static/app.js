@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {projects: [], runs: [], project: null, projectRuns: [], view: 'overview', navigation: 0, current: null, chat: [], artifacts: [], events: [], stream: null, template: 'lru', projectId: null, file: null, revision: 0};
+const state = {projects: [], runs: [], project: null, projectRuns: [], requirements: [], workItems: [], selectedRequirementId: null, selectedWorkItemId: null, view: 'overview', navigation: 0, current: null, chat: [], artifacts: [], events: [], stream: null, template: 'lru', projectId: null, file: null, revision: 0};
 const labels = {QUEUED:'等待领取',RUNNING:'运行中',COMPLETED:'已完成',FAILED:'失败',INTERRUPTED:'已中断',PENDING:'等待中',BLOCKED:'已阻塞'};
 const roles = [['architecture','架构师','ARCHITECT'],['coding','开发者','CODER'],['review','审查者','REVIEWER'],['testing','测试者','TESTER']];
 const lruRequirement = '实现一个 Python LRU Cache，支持 get、put、len 和按最近使用顺序返回 keys。\n正确处理容量校验、更新、淘汰、空值和实例隔离。\n为实现编写单元测试，并通过平台内置的独立验收测试。';
@@ -202,13 +202,13 @@ function switchView(view, hash, push=true) {
   state.view=view; const navigation=++state.navigation;
   for(const [id,active] of [
     ['nav-projects',view==='overview'],
-    ['nav-requirements',view==='requirement-studio'],
+    ['nav-requirements',view==='requirement-studio'||view==='work-item-detail'],
     ['nav-workspace',view==='project-detail'],
   ]) {
     $(id).classList.toggle('active',active);
     if(active) $(id).setAttribute('aria-current','page'); else $(id).removeAttribute('aria-current');
   }
-  for(const id of ['overview','project-detail','detail','requirement-studio']) $(id)?.classList.toggle('hidden',id!==view);
+  for(const id of ['overview','project-detail','work-item-detail','detail','requirement-studio']) $(id)?.classList.toggle('hidden',id!==view);
   if(push && location.hash!==hash) history.pushState(null,'',location.pathname+hash);
   return navigation;
 }
@@ -216,12 +216,12 @@ function showOverview(push=true) {
   switchView('overview','',push);
   $('breadcrumb-current').textContent = '项目管理'; refreshOverview().catch(error => notice(error.message));
 }
-async function openProject(id, push=true, selectedRun=null) {
+async function openProject(id, push=true, selectedRun=null, selectedRequirement=null) {
   if(state.project) drafts.set(state.project.id,$('workspace-requirements').value);
-  const navigation=switchView('project-detail',`#project/${id}`,push);
+  const navigation=switchView('project-detail',`#project/${id}${selectedRequirement?'/'+selectedRequirement:''}`,push);
   $('project-detail').classList.remove('development-unselected');
   $('development-empty').classList.add('hidden');
-  state.project=null; state.projectRuns=[];
+  state.project=null; state.projectRuns=[]; state.requirements=[]; state.workItems=[]; state.selectedRequirementId=null; state.selectedWorkItemId=null;
   for(const key of ['lead-messages','feature-flow','feature-contracts','acceptance-checklist','milestone-rows']) $(key)?.replaceChildren();
   $('project-title').textContent='加载项目…'; $('project-id').textContent=id;
   $('project-start').disabled=true; $('project-refresh').disabled=true;
@@ -233,16 +233,78 @@ async function openProject(id, push=true, selectedRun=null) {
   for(const key of ['project-tasks-empty','project-runs-empty']) $(key).classList.add('hidden');
   $('breadcrumb-current').textContent='项目研发空间';
   try {
-    const [project, history, agentConfig]=await Promise.all([api(`/v1/projects/${id}`),api(`/v1/runs?project_id=${encodeURIComponent(id)}`),api(`/v1/projects/${id}/agents/config`)]);
+    const [project, history, agentConfig, requirementResponse]=await Promise.all([api(`/v1/projects/${id}`),api(`/v1/runs?project_id=${encodeURIComponent(id)}`),api(`/v1/projects/${id}/agents/config`),api(`/v1/projects/${id}/requirements`)]);
     if(navigation!==state.navigation) return;
-    state.project=project; state.projectRuns=history.runs; state.agentConfig=agentConfig; renderProject(); renderAgentConfig();
+    state.project=project; state.projectRuns=history.runs; state.agentConfig=agentConfig; state.requirements=requirementResponse.requirements;
+    const selectedRecord=history.runs.find(item=>item.id===selectedRun);
+    const preferred=selectedRequirement || selectedRecord?.summary?.requirement_id || project.context?.active_requirement?.id;
+    state.selectedRequirementId=state.requirements.some(item=>item.id===preferred) ? preferred :
+      (state.requirements.find(item=>item.kind!=='legacy') || state.requirements[0])?.id || null;
+    renderProject();
     if(!drafts.has(id) && typeof project.context?.requirements==='string') $('workspace-requirements').value=project.context.requirements;
     if(project.context?.preferred_backend) $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':project.context.preferred_backend;
     if(agentConfig.revision > 0) $('workspace-backend').value='configured';
     else if(!project.context?.preferred_backend) $('workspace-backend').value='mixed';
-    const runId=selectedRun || history.runs[0]?.id;
-    if(runId) await loadRun(runId); else renderWorkspace();
+    if(selectedRun) await loadRun(selectedRun);
+    else { state.current=null; $('detail').classList.add('hidden'); renderWorkspace(); }
+    if(state.selectedRequirementId) await refreshRequirementData(state.selectedRequirementId);
   } catch(error) { if(navigation===state.navigation) { $('project-title').textContent='项目加载失败'; notice(error.message); } }
+}
+function requirementTitleFromRecord(item) {
+  return item.document?.title?.trim() || (item.kind==='legacy' ? '历史运行（待整理）' : `未命名需求 · ${item.id.slice(0,8)}`);
+}
+async function refreshRequirementData(reqId) {
+  if(!state.project || !reqId) return;
+  const projectId=state.project.id;
+  const [items,chat]=await Promise.all([api(`/v1/projects/${projectId}/requirements/${reqId}/work-items`),
+    api(`/v1/projects/${projectId}/requirements/${reqId}/chat`)]);
+  if(state.project?.id!==projectId || state.selectedRequirementId!==reqId) return;
+  state.workItems=items.work_items; state.chat=chat.messages;
+  renderWorkItems(); renderProductWorkspace(); renderWorkspace();
+}
+function renderWorkItems() {
+  const list=$('work-item-list'); if(!list) return;
+  list.replaceChildren();
+  if(!state.workItems.length) { list.append(node('p','panel-empty','此需求还没有工作项。可在下方创建功能、变更或 Debug。')); return; }
+  for(const item of state.workItems) {
+    const card=node('article','work-item-card');
+    const heading=node('div','work-item-heading');
+    heading.append(node('span','work-item-kind',({FEATURE:'功能',CHANGE:'变更',DEBUG:'Debug'})[item.kind] || item.kind),node('strong','',item.title),badge(item.status));
+    card.append(heading,node('p','muted',businessRequirementText(item.description).slice(0,160)),
+      node('small','muted',`${item.acceptance_criteria.length} 项验收条件 · ${item.run_ids.length} 次执行`));
+    const actions=node('div','work-item-actions');
+    const open=node('button','table-action','进入开发项 →');
+    open.addEventListener('click',()=>openWorkItem(item.project_id,item.requirement_id,item.id)); actions.append(open);
+    card.append(actions); list.append(card);
+  }
+}
+async function startWorkItem(item) {
+  const backend=$('workspace-backend').value;
+  const requirements=item.acceptance_criteria.length ?
+    `${item.description}\n\n验收条件：\n${item.acceptance_criteria.map(text=>`- ${text}`).join('\n')}` : item.description;
+  const run=await api('/v1/runs',{method:'POST',body:JSON.stringify({project_id:state.project.id,
+    work_item_id:item.id,requirements,template:'custom',workspace_mode:'repository',
+    backend,max_retries:Number($('workspace-retries').value)})});
+  await openWorkItem(state.project.id,item.requirement_id,item.id,true,run.id);
+}
+async function openWorkItem(projectId,reqId,itemId,push=true,selectedRun=null) {
+  if(typeof studioDirty!=='undefined' && studioDirty && state.view==='requirement-studio') { notice('请先保存当前需求草稿再进入开发项。'); return; }
+  await openProject(projectId,false,null,reqId);
+  const item=state.workItems.find(entry=>entry.id===itemId);
+  if(!item) { notice('开发项不存在或不属于此需求。'); return; }
+  state.selectedWorkItemId=itemId;
+  const navigation=switchView('work-item-detail',`#work-item/${projectId}/${reqId}/${itemId}`,push);
+  $('work-item-title-view').textContent=item.title;
+  $('work-item-kind-view').textContent=({FEATURE:'功能',CHANGE:'变更',DEBUG:'Debug'})[item.kind] || item.kind;
+  $('work-item-description-view').textContent=businessRequirementText(item.description);
+  $('work-item-start-view').textContent=item.run_ids.length ? '再次执行' : '开始执行';
+  $('work-item-criteria-view').replaceChildren();
+  for(const text of item.acceptance_criteria) $('work-item-criteria-view').append(node('li','',text));
+  $('work-item-criteria-view').classList.toggle('hidden',!item.acceptance_criteria.length);
+  const runId=selectedRun || item.run_ids[0];
+  if(runId) await loadRun(runId);
+  else { state.current=null; $('detail').classList.add('hidden'); renderWorkspace(); }
+  if(navigation===state.navigation) { renderWorkspace(); renderProductWorkspace(); }
 }
 function renderProject() {
   const project=state.project, runs=state.projectRuns, latest=runs[0];
@@ -280,7 +342,9 @@ async function openRun(id, push=true) {
     const navigation=state.navigation;
     const run=await api(`/v1/runs/${id}`);
     if(navigation!==state.navigation) return;
-    await openProject(run.project_id,push,id);
+    if(run.summary?.requirement_id && run.summary?.work_item_id)
+      await openWorkItem(run.project_id,run.summary.requirement_id,run.summary.work_item_id,push,id);
+    else await openProject(run.project_id,push,id);
   } catch(error) { notice(error.message); }
 }
 async function loadRun(id) {
@@ -325,12 +389,14 @@ async function refreshRun(id) {
   renderRun(); renderWorkspace(); await refreshArtifacts(id);
 }
 async function refreshChat(id) {
-  const [data,history]=await Promise.all([api(`/v1/runs/${id}/chat`),
+  const reqId=state.selectedRequirementId;
+  const chatPath=reqId && state.project ? `/v1/projects/${state.project.id}/requirements/${reqId}/chat` : `/v1/runs/${id}/chat`;
+  const [data,history]=await Promise.all([api(chatPath),
     state.project ? api(`/v1/runs?project_id=${encodeURIComponent(state.project.id)}`) : Promise.resolve({runs:[]})]);
   if(state.current?.id!==id) return;
   state.chat=data.messages;
   state.projectRuns=history.runs;
-  renderProductWorkspace();
+  renderProductWorkspace(); renderWorkItems();
 }
 
 function latestRelatedRun(run) {
@@ -347,7 +413,8 @@ function latestRelatedRun(run) {
 function renderRun() {
   const run=state.current;
   const project=state.project;
-  $('detail-title').textContent = project?.name || '研发任务';
+  const item=state.workItems.find(entry=>entry.id===state.selectedWorkItemId);
+  $('detail-title').textContent = item?.title || project?.name || '研发任务';
   $('run-short').textContent = `RUN / ${run.id.slice(0,8).toUpperCase()}`;
   $('detail-subtitle').textContent = run.template === 'lru' ? 'LRU Cache · 从需求契约到独立沙箱验收' : '自定义 Python 任务 · 标准库执行环境';
   $('run-status').className = `badge ${run.status}`; $('run-status').textContent = labels[run.status];
@@ -355,7 +422,8 @@ function renderRun() {
   let historySelect=$('run-history');
   if(!historySelect) { historySelect=node('select'); historySelect.id='run-history'; historySelect.setAttribute('aria-label','历史运行'); historySelect.addEventListener('change',()=>openRun(historySelect.value)); $('run-time').parentElement.append(historySelect); }
   historySelect.replaceChildren();
-  const history=state.projectRuns.some(item=>item.id===run.id) ? state.projectRuns : [run,...state.projectRuns];
+  const scoped=state.selectedWorkItemId ? state.projectRuns.filter(item=>item.summary?.work_item_id===state.selectedWorkItemId) : state.projectRuns;
+  const history=scoped.some(item=>item.id===run.id) ? scoped : [run,...scoped];
   for(const item of history) { const option=node('option','',`${stamp(item.created_at)} · ${labels[item.status]}`); option.value=item.id; historySelect.append(option); }
   historySelect.value=run.id;
   $('rerun').disabled = !terminal(run.status);
@@ -429,17 +497,18 @@ function renderTimeline() {
 function renderWorkspace() {
   const run=state.current;
   const active=state.projectRuns.some(item=>['QUEUED','RUNNING'].includes(item.status));
-  $('workspace-submit').disabled=submittingWorkspace || active || !state.project;
-  if(chatButton) chatButton.disabled=!run || submittingChat;
+  $('workspace-submit').disabled=submittingWorkspace || active || !state.project || !state.selectedRequirementId;
+  if(chatButton) chatButton.disabled=!state.selectedRequirementId || submittingChat;
   if(continueButton) {
     continueButton.classList.toggle('hidden',!run || !['FAILED','INTERRUPTED'].includes(run.status));
     continueButton.disabled=!run || submittingChat;
   }
-  $('workspace-note').textContent=active ? '团队正在执行；可向 Team Lead 追问本轮进展。启动新需求会创建独立运行。' : '发送消息用于本轮讨论；点击“继续最新运行”才会启动恢复动作。启动新需求会创建独立运行。';
+  $('workspace-note').textContent=active ? '团队正在执行；仍可在当前需求中与 Team Lead 讨论。' : '讨论按需求连续保存；创建工作项才会启动编码。失败运行可从所选节点恢复。';
   const history=$('workspace-history'); history.replaceChildren();
-  if(!state.projectRuns.length) history.append(node('option','','暂无执行记录'));
-  for(const item of state.projectRuns) { const option=node('option','',`${stamp(item.created_at)} · ${item.id.slice(0,8)} · ${labels[item.status]}`); option.value=item.id; history.append(option); }
-  history.disabled=!state.projectRuns.length;
+  const scoped=state.projectRuns.filter(item=>state.selectedWorkItemId ? item.summary?.work_item_id===state.selectedWorkItemId : item.summary?.requirement_id===state.selectedRequirementId);
+  if(!scoped.length) history.append(node('option','','暂无执行记录'));
+  for(const item of scoped) { const option=node('option','',`${stamp(item.created_at)} · ${item.id.slice(0,8)} · ${labels[item.status]}`); option.value=item.id; history.append(option); }
+  history.disabled=!scoped.length;
   if(run) history.value=run.id;
   $('conversation').replaceChildren();
   if(run) appendAgentDialogue({speaker:'Team Lead',target:'@Architect',role:'lead',status:run.status,
@@ -511,21 +580,33 @@ function appendAgentDialogue({speaker,target,role,status,text,task=null}) {
   }
   item.append(avatar,body);$('conversation').append(item);
 }
-$('workspace-history').addEventListener('change',()=>openProject(state.project.id,false,$('workspace-history').value));
+$('workspace-history').addEventListener('change',()=>state.selectedWorkItemId ?
+  openWorkItem(state.project.id,state.selectedRequirementId,state.selectedWorkItemId,true,$('workspace-history').value) :
+  openProject(state.project.id,false,$('workspace-history').value,state.selectedRequirementId));
 $('workspace-example').addEventListener('click',()=>{ $('workspace-requirements').value=lruRequirement; $('workspace-requirements').focus(); });
 $('workspace-form').addEventListener('submit',async event=>{
   event.preventDefault();
   if(submittingWorkspace || !state.project || $('workspace-submit').disabled) return;
-  const projectId=state.project.id, navigation=state.navigation, requirements=$('workspace-requirements').value.trim();
+  const projectId=state.project.id, reqId=state.selectedRequirementId, navigation=state.navigation, requirements=$('workspace-requirements').value.trim();
+  const title=$('work-item-title').value.trim();
+  const acceptance=$('work-item-acceptance').value.split('\n').map(text=>text.trim()).filter(Boolean);
   if(!requirements) { $('workspace-error').textContent='请输入研发需求。'; return; }
+  if(!reqId) { $('workspace-error').textContent='请先创建或选择一项需求。'; return; }
+  if(!title) { $('workspace-error').textContent='请填写工作项标题。'; return; }
+  if(acceptance.length>50) { $('workspace-error').textContent='验收条件最多 50 条。'; return; }
+  if(acceptance.some(text=>text.length>512)) { $('workspace-error').textContent='每条验收条件最多 512 字。'; return; }
+  const executionText=acceptance.length ? `${requirements}\n\n验收条件：\n${acceptance.map(text=>`- ${text}`).join('\n')}` : requirements;
+  if(executionText.length>16000) { $('workspace-error').textContent='说明与验收条件合计不能超过 16000 字。'; return; }
   submittingWorkspace=true; $('workspace-submit').disabled=true; $('workspace-error').textContent='';
   try {
     const example=requirements===lruRequirement;
-    const run=await api('/v1/runs',{method:'POST',body:JSON.stringify({project_id:projectId,requirements,
+    const item=await api(`/v1/projects/${projectId}/requirements/${reqId}/work-items`,{method:'POST',body:JSON.stringify({
+      kind:$('work-item-kind').value,title,description:requirements,acceptance_criteria:acceptance})});
+    const run=await api('/v1/runs',{method:'POST',body:JSON.stringify({project_id:projectId,work_item_id:item.id,requirements:executionText,
       template:example?'lru':'custom',workspace_mode:example?'isolated':'repository',
       backend:$('workspace-backend').value,max_retries:Number($('workspace-retries').value)})});
     drafts.delete(projectId);
-    if(navigation===state.navigation) { $('workspace-requirements').value=''; await openProject(projectId,false,run.id); }
+    if(navigation===state.navigation) { $('workspace-requirements').value=''; $('work-item-title').value=''; $('work-item-acceptance').value=''; await openWorkItem(projectId,reqId,item.id,true,run.id); }
   } catch(error) { if(navigation===state.navigation) $('workspace-error').textContent=error.message; }
   finally { submittingWorkspace=false; if(state.view==='project-detail' && state.project) renderWorkspace(); }
 });
@@ -572,7 +653,7 @@ $('project-start').addEventListener('click',()=>openRequirementEntry(state.proje
 $('project-refresh').addEventListener('click',()=>openProject(state.project.id,false));
 $('close-dialog').addEventListener('click',()=>$('create-dialog').close());
 $('refresh').addEventListener('click',()=>refreshOverview().catch(error=>notice(error.message)));
-$('rerun').addEventListener('click',()=>{ $('workspace-requirements').value=state.current.requirements; $('workspace-requirements').focus(); $('workspace-form').scrollIntoView({behavior:'smooth',block:'center'}); });
+$('rerun').addEventListener('click',()=>{ const item=state.workItems.find(entry=>entry.id===state.selectedWorkItemId); if(item) startWorkItem(item).catch(error=>notice(error.message)); });
 $('resume-review').addEventListener('click',async()=>{
   const run=state.current;
   if(!run) return;
@@ -580,7 +661,9 @@ $('resume-review').addEventListener('click',async()=>{
   try {
     const taskId=$('resume-node').value;
     const resumed=await api(`/v1/runs/${run.id}/resume`,{method:'POST',body:JSON.stringify({task_id:taskId})});
-    await openProject(run.project_id,true,resumed.id);
+    if(run.summary?.requirement_id && run.summary?.work_item_id)
+      await openWorkItem(run.project_id,run.summary.requirement_id,run.summary.work_item_id,true,resumed.id);
+    else await openProject(run.project_id,true,resumed.id);
     notice(`已创建恢复运行：从 ${taskId} 节点继续。`);
   } catch(error) {
     $('resume-review').disabled=false;
@@ -594,15 +677,16 @@ $('download').addEventListener('click',()=>{
   const url=URL.createObjectURL(blob); const link=node('a'); link.href=url; link.download=`run-${state.current.id}.json`; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 async function route() {
+  const workItem=location.hash.match(/^#work-item\/([a-f0-9]{32})\/([a-f0-9]{32})\/([a-f0-9]{32})$/);
+  if(workItem) return openWorkItem(workItem[1],workItem[2],workItem[3],false);
   const prd=location.hash.match(/^#requirements\/([a-f0-9]{32})\/([a-f0-9]{32})$/);
   if(prd) return openStudio(prd[1],prd[2],false);
   if(location.hash==='#development') return openDevelopment(false);
-  const project=location.hash.match(/^#project\/([a-f0-9]{32})$/), run=location.hash.match(/^#run\/([a-f0-9]{32})$/);
-  if(project) await openProject(project[1],false); else if(run) await openRun(run[1],false); else showOverview(false);
+  const project=location.hash.match(/^#project\/([a-f0-9]{32})(?:\/([a-f0-9]{32}))?$/), run=location.hash.match(/^#run\/([a-f0-9]{32})$/);
+  if(project) await openProject(project[1],false,null,project[2] || null); else if(run) await openRun(run[1],false); else showOverview(false);
 }
 window.addEventListener('popstate',route);
 async function init() { try { await Promise.all([refreshOverview(),workerStatus()]); await route(); } catch(error){notice(error.message);} }
-init();
 setInterval(()=>{workerStatus().catch(()=>notice('服务连接中断，请检查 ./scripts/deploy.sh status')); if(state.view==='overview')refreshOverview().catch(()=>{});},10000);
 
 // Three-tier workspace: business-facing collaboration with opt-in execution evidence.
@@ -622,22 +706,27 @@ chatButton=node('button','secondary','发送给 Team Lead'); chatButton.type='bu
 $('workspace-submit').before(chatButton);
 continueButton=node('button','secondary hidden','继续最新运行'); continueButton.type='button'; continueButton.disabled=true;
 chatButton.after(continueButton);
-$('workspace-submit').textContent='启动新需求 →';
-$('workspace-form').querySelector('label[for="workspace-requirements"]').textContent='新需求、当前运行的追问或续跑指令';
+$('workspace-submit').textContent='创建工作项并执行 →';
+$('workspace-form').querySelector('label[for="workspace-requirements"]').textContent='工作项说明或当前需求的讨论';
 $('workspace-requirements').placeholder='询问本轮进展、失败原因或提出修改建议…';
+const workItemAcceptanceLabel=node('label','','开发项验收条件（每行一项）');
+const workItemAcceptance=node('textarea'); workItemAcceptance.id='work-item-acceptance'; workItemAcceptance.rows=2;
+workItemAcceptance.placeholder='例如：项目开发页不再显示旧卡片'; workItemAcceptance.maxLength=16000;
+workItemAcceptanceLabel.append(workItemAcceptance); $('workspace-requirements').after(workItemAcceptanceLabel);
 chatButton.addEventListener('click',async()=>{
-  const runId=state.current?.id, message=$('workspace-requirements').value.trim();
-  if(!runId) { $('workspace-error').textContent='请先选择一条运行记录。'; return; }
+  const projectId=state.project?.id, reqId=state.selectedRequirementId, message=$('workspace-requirements').value.trim();
+  if(!projectId || !reqId) { $('workspace-error').textContent='请先选择一项需求。'; return; }
   if(!message) { $('workspace-error').textContent='请输入要讨论的问题。'; return; }
   if(submittingChat) return;
   submittingChat=true; chatButton.disabled=true; $('workspace-error').textContent='';
   try {
-    await api(`/v1/runs/${runId}/chat`,{method:'POST',body:JSON.stringify({message})});
-    if(state.current?.id===runId) { $('workspace-requirements').value=''; await refreshChat(runId); }
+    await api(`/v1/projects/${projectId}/requirements/${reqId}/chat`,{method:'POST',body:JSON.stringify({message})});
+    if(state.project?.id===projectId && state.selectedRequirementId===reqId) { $('workspace-requirements').value=''; await refreshRequirementData(reqId); }
   } catch(error) { $('workspace-error').textContent=error.message; }
-  finally { submittingChat=false; chatButton.disabled=!state.current; }
+  finally { submittingChat=false; chatButton.disabled=!state.selectedRequirementId; }
 });
-setInterval(()=>{ if(state.view==='project-detail' && state.current) refreshChat(state.current.id).catch(()=>{}); },8000);
+setInterval(()=>{ if(['requirement-studio','work-item-detail'].includes(state.view) && state.selectedRequirementId)
+  refreshRequirementData(state.selectedRequirementId).catch(()=>{}); },8000);
 continueButton.addEventListener('click',async()=>{
   const runId=state.current?.id;
   if(!runId || submittingChat) return;
@@ -656,6 +745,23 @@ milestonesPanel.append(milestoneHeading,milestoneRows,node('p','field-note','研
 leadPanel.after(milestonesPanel);
 const evidenceDisclosure=node('details','technical-evidence'); evidenceDisclosure.append(node('summary','','技术证据与源码（按需展开）'));
 $('workspace-execution').before(evidenceDisclosure); evidenceDisclosure.append($('workspace-execution'));
+const workItemView=node('section','view hidden'); workItemView.id='work-item-detail';
+const workItemBack=node('button','quiet','← 返回所属需求');
+workItemBack.addEventListener('click',()=>state.project && state.selectedRequirementId && openStudio(state.project.id,state.selectedRequirementId));
+const workItemHeading=node('div','page-heading');
+const workItemIdentity=node('div'); workItemIdentity.append(node('div','eyebrow','DEVELOPMENT ITEM'));
+const workItemTitle=node('h1'); workItemTitle.id='work-item-title-view'; workItemIdentity.append(workItemTitle);
+const workItemKind=node('span','work-item-kind'); workItemKind.id='work-item-kind-view';
+const workItemStart=node('button','primary','开始执行'); workItemStart.id='work-item-start-view';
+workItemStart.addEventListener('click',async()=>{const item=state.workItems.find(entry=>entry.id===state.selectedWorkItemId);if(!item)return;workItemStart.disabled=true;try{await startWorkItem(item);}catch(error){notice(error.message);}finally{workItemStart.disabled=false;}});
+const workItemActions=node('div','heading-actions'); workItemActions.append(workItemKind,workItemStart);
+workItemHeading.append(workItemIdentity,workItemActions);
+const workItemDescription=node('p','work-item-description'); workItemDescription.id='work-item-description-view';
+const workItemCriteria=node('ul','work-item-criteria'); workItemCriteria.id='work-item-criteria-view';
+workItemView.append(workItemBack,workItemHeading,workItemDescription,workItemCriteria,
+  document.querySelector('.workspace-toolbar'),document.querySelector('.workspace-grid'),evidenceDisclosure);
+document.querySelector('main>footer').before(workItemView);
+document.querySelectorAll('#project-detail .project-section').forEach(section=>section.classList.add('hidden'));
 const milestoneDialog=node('dialog'); milestoneDialog.id='milestone-dialog';
 const milestoneForm=node('form');
 const milestoneTitle=node('h2','','编辑节点 / 调整功能'); milestoneForm.append(milestoneTitle);
@@ -699,24 +805,29 @@ function renderProductWorkspace() {
   const latestTask=tasks.at(-1), role=roles.find(r=>r[0]===latestTask?.capability)?.[1];
   const failedReview=run?.status==='FAILED' && latestTask?.capability==='review' && latestTask?.error?.includes('ValidationError');
   const passed=latest?.summary?.final_test_summary;
+  const completedItems=state.workItems.filter(item=>item.status==='COMPLETED').length;
+  const requirementSummary=state.workItems.length ?
+    `此需求有 ${state.workItems.length} 个开发项，其中 ${completedItems} 个已完成。可在开发项列表查看各自的执行和交付物。` :
+    '此需求还没有开发项。可以先与我讨论，再创建功能、变更或 Debug。';
   const lead=related?.status==='COMPLETED' ? `关联恢复运行 ${related.id.slice(0,8)} 已完成，Tester ${passed?.counts?.passed ?? 0}/${passed?.total ?? 0} 项测试通过。验收范围为生成代码附带的测试，产物尚未部署到项目。` :
     related?.status==='RUNNING'||related?.status==='QUEUED' ? `关联恢复运行 ${related.id.slice(0,8)} 正在${related.status==='RUNNING'?'执行':'等待领取'}；原运行的失败状态作为历史记录保留。` :
     related?.status==='FAILED'||related?.status==='INTERRUPTED' ? `关联恢复运行 ${related.id.slice(0,8)} 仍需处理。可进入该运行查看最新失败证据并选择节点继续。` :
-    run?.status==='COMPLETED'?'团队已完成本轮实现与自动化验证。请检查右侧交付物，逐项确认业务验收标准。':run?.status==='QUEUED'?'需求已接收，正在等待团队领取。':run?.status==='RUNNING'?`团队正在推进${role || '研发'}阶段。审查或验证发现的问题将在本轮内交回开发者修订。`:failedReview?'Reviewer 的结构化输出未通过格式校验，本轮已停止。可在运行详情中选择恢复节点。':run?'本轮研发需要跟进。可向 Team Lead 询问原因，或选择节点继续。':'请描述业务目标、功能范围和验收标准，我将通过现有调度流程交给研发团队。';
+    run?.status==='COMPLETED'?'团队已完成本轮实现与自动化验证。请检查右侧交付物，逐项确认业务验收标准。':run?.status==='QUEUED'?'开发项已接收，正在等待团队领取。':run?.status==='RUNNING'?`团队正在推进${role || '研发'}阶段。审查或验证发现的问题将在本轮内交回开发者修订。`:failedReview?'Reviewer 的结构化输出未通过格式校验，本轮已停止。可在运行详情中选择恢复节点。':run?'本轮研发需要跟进。可向 Team Lead 询问原因，或选择节点继续。':requirementSummary;
   $('lead-messages').replaceChildren();
-  if(run) { const request=node('article','message user-message'); request.append(node('strong','','你 · 本轮需求'),node('p','message-content',businessRequirementText(run.requirements))); $('lead-messages').append(request); }
+  if(run) { const request=node('article','message user-message'); request.append(node('strong','','你 · 当前工作项'),node('p','message-content',businessRequirementText(run.requirements))); $('lead-messages').append(request); }
   const report=node('article','message lead-message'); report.append(node('strong','','Team Lead · 状态汇总'),node('p','',lead)); $('lead-messages').append(report);
-  if(related) { const link=node('button','table-action','查看最新恢复运行 →'); link.addEventListener('click',()=>openProject(state.project.id,true,related.id)); report.append(link); }
+  if(related) { const link=node('button','table-action','查看最新恢复运行 →'); link.addEventListener('click',()=>openRun(related.id)); report.append(link); }
   for(const item of state.chat) {
     const question=node('article','message user-message');
-    question.append(node('strong','','你 · 本轮讨论'),node('p','message-content',item.message));
+    const linkedItem=state.workItems.find(entry=>entry.id===item.work_item_id);
+    question.append(node('strong','',linkedItem?`你 · ${linkedItem.title.slice(0,30)}`:'你 · 需求讨论'),node('p','message-content',item.message));
     $('lead-messages').append(question);
     const reply=node('article','message lead-message');
     const answer=item.answer || (item.status==='FAILED' ? item.error || '回复失败，请重试。' : 'Team Lead 正在整理本轮上下文，等待回复…');
     reply.append(node('strong','',`Team Lead · ${item.resume_run_id?'已启动恢复':item.status==='COMPLETED'?'回复':item.status==='FAILED'?'回复失败':'处理中'}`),node('p','message-content',answer));
     if(item.resume_run_id) {
       const link=node('button','table-action','进入恢复运行 →');
-      link.addEventListener('click',()=>openProject(state.project.id,true,item.resume_run_id));
+      link.addEventListener('click',()=>openRun(item.resume_run_id));
       reply.append(link);
     }
     $('lead-messages').append(reply);

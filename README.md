@@ -417,7 +417,7 @@ Team Lead 当前是基于真实状态的汇总界面，并非新增独立模型�
 
 ### Requirement Studio / PRD 工作台
 
-项目右上角“编写研发需求”或项目列表“编辑需求”进入 `/#requirements/<project_id>/<req_id>`。支持原始 Markdown 导入、多轮 Architect 调整、模块折叠与双列功能卡片、P0/P1/P2 筛选、业务验收清单、草稿保存和提交研发。表单完整度为确定性字段检查；模型完整度与风险清单单独标注，不伪装实时模型审校。
+项目右上角“查看需求与开发项”或项目列表“编辑需求”进入 `/#requirements/<project_id>/<req_id>`。支持原始 Markdown 导入、多轮 Architect 调整、模块折叠与双列功能卡片、P0/P1/P2 筛选、业务验收清单、草稿保存和提交研发。表单完整度为确定性字段检查；模型完整度与风险清单单独标注，不伪装实时模型审校。
 
 PRD 持久化在 `workbench_requirements` 表；版本冲突返回 409。保存会同步项目交付面板，提交在同一数据库事务内保存需求、创建队列任务、关联里程碑。AI 拆解使用独立 `prd` 队列任务与严格 JSON Schema，不执行代码、不伪造测试通过证据。原始草稿可以先保存，提交执行必须满足完整 PRD 契约。
 
@@ -428,3 +428,9 @@ PRD 持久化在 `workbench_requirements` 表；版本冲突返回 409。保存�
 默认的非敏感参数位于 `config/llm_config.json`：Architect 使用已登录的 Codex CLI，Coder 与 Reviewer 在 `mixed` 模式下使用 `deepseek-v4.1-flash`，通过 DashScope OpenAI 兼容地址流式生成 JSON。将 API Key 仅放在被 Git 忽略的 `config/llm.local.json` 或环境变量 `OPENAI_API_KEY`；本地文件可包含同一组非敏感参数并覆盖默认配置。`scripts/workbench.sh` 优先读取本地文件。Tester 始终使用禁网 Docker 沙箱执行测试，目前没有独立模型调用。
 
 自定义任务的工作流会严格验证源码与测试文件。仅缺少的提交摘要和可无歧义归位的顶层测试文件路径可自动修复格式；缺少真实源码或测试、截断输出和无效 JSON 仍会失败。`scripts/validate_cli_loop.py` 验证的是独立的 Codex 订阅修复控制器；混合模式的 Architect → Coder → Reviewer → Tester 通过工作台运行记录验证。
+
+### 项目、需求与开发项
+
+研发工作按「项目 → 需求 → 开发项」组织。需求页保存该需求的 Team Lead 连续讨论，并列出类型为功能、变更或 Debug 的开发项；点击开发项进入独立页面查看 Agent 交接、测试证据和同一开发项的历次执行。一次执行或修复是开发项下的 Run，不需要再创建项目或需求。
+
+旧运行在服务启动时按已有 PRD 关联归类；无法可靠匹配的运行进入项目内的「历史运行（待整理）」需求，原始 Run ID、测试证据和会话均保留。Agent 模型配置使用独立的 `/agents` 页面。

@@ -59,7 +59,63 @@ class StoreConflict(ValueError):
 class RunStore:
     def __init__(self, url):
         self.engine = create_engine(url, pool_pre_ping=True)
+        from . import requirements as _requirements  # Register hierarchy tables before create_all.
         metadata.create_all(self.engine)
+        self._backfill_hierarchy()
+
+    def _backfill_hierarchy(self):
+        """Attach historical runs to a requirement and work item without changing their evidence."""
+        from .requirements import requirements, work_items, ensure_legacy_requirement, insert_work_item
+        with self.engine.begin() as db:
+            records = db.execute(select(runs).order_by(runs.c.created_at)).mappings().all()
+            if not records:
+                return
+            req_by_run = {}
+            for payload, in db.execute(select(requirements.c.payload)):
+                for run_id in [payload.get('run_id'), payload.get('analysis_id')]:
+                    if run_id:
+                        req_by_run[run_id] = payload['id']
+                for experiment in payload.get('experiment_runs', []):
+                    if isinstance(experiment, dict) and experiment.get('run_id'):
+                        req_by_run[experiment['run_id']] = payload['id']
+            item_by_source = {payload.get('source_run_id'): payload for payload, in
+                              db.execute(select(work_items.c.payload)) if payload.get('source_run_id')}
+            assigned = {}
+            for row in records:
+                if row['template'] == 'chat':
+                    continue
+                summary = dict(row['summary'])
+                if row['template'] == 'resume':
+                    parent = assigned.get(summary.get('parent_run_id'))
+                    if parent:
+                        summary.setdefault('requirement_id', parent[0])
+                        summary.setdefault('work_item_id', parent[1])
+                elif row['template'] == 'prd':
+                    req_id = req_by_run.get(row['id'])
+                    if req_id:
+                        summary.setdefault('requirement_id', req_id)
+                elif not summary.get('work_item_id'):
+                    req_id = summary.get('requirement_id') or req_by_run.get(row['id'])
+                    if not req_id:
+                        req_id = ensure_legacy_requirement(db, row['project_id'])
+                    item = item_by_source.get(row['id'])
+                    if item is None:
+                        title = row['requirements'].strip().splitlines()[0][:120] or f"运行 {row['id'][:8]}"
+                        item = insert_work_item(db, row['project_id'], req_id, 'FEATURE', title,
+                                                row['requirements'][:16000], source_run_id=row['id'])
+                        item_by_source[row['id']] = item
+                    summary.update(requirement_id=req_id, work_item_id=item['id'])
+                assigned[row['id']] = (summary.get('requirement_id'), summary.get('work_item_id'))
+                if summary != row['summary']:
+                    db.execute(runs.update().where(runs.c.id == row['id']).values(summary=summary))
+            for row in records:
+                if row['template'] != 'chat':
+                    continue
+                summary = dict(row['summary'])
+                parent = assigned.get(summary.get('parent_run_id'))
+                if parent and not summary.get('requirement_id'):
+                    summary.update(requirement_id=parent[0], work_item_id=parent[1])
+                    db.execute(runs.update().where(runs.c.id == row['id']).values(summary=summary))
 
     @contextmanager
     def transaction(self):
@@ -134,25 +190,40 @@ class RunStore:
         stale = db.execute(select(runs.c.id, runs.c.summary).where(runs.c.status == "RUNNING", runs.c.lease_until < time.time())
                            .with_for_update(skip_locked=True)).all()
         for run_id, previous in stale:
-            summary = {**{key: previous[key] for key in ('agent_config', 'parent_run_id', 'workspace_mode') if key in previous},
+            summary = {**{key: previous[key] for key in ('agent_config', 'parent_run_id', 'workspace_mode',
+                'requirement_id', 'work_item_id') if key in previous},
                        "status": "FAILED", "error": "Worker lease expired; inspect evidence and resume from a checkpoint"}
             db.execute(runs.update().where(runs.c.id == run_id).values(status="INTERRUPTED", summary=summary,
                        updated_at=time.time(), generation=runs.c.generation + 1))
             self.event(db, run_id, "run_finished", {"status": "INTERRUPTED", "error": summary["error"]})
 
     def create_run(self, project_id, backend, requirements, template="custom", max_retries=3,
-                   workspace_mode='isolated'):
+                   workspace_mode='isolated', work_item_id=None):
         now = time.time()
         record = dict(id=uuid.uuid4().hex, project_id=project_id, status="QUEUED", backend=backend,
                       requirements=requirements, template=template, max_retries=max_retries,
                       created_at=now, updated_at=now, generation=0, tasks=[], summary={})
         with self.transaction() as db:
+            from .requirements import requirements as requirement_rows, work_items, ensure_legacy_requirement, insert_work_item
             project = db.scalar(select(projects.c.payload).where(projects.c.id == project_id).with_for_update())
             if project is None:
                 raise KeyError(project_id)
             if workspace_mode not in ('isolated', 'repository') or (template != 'custom' and workspace_mode == 'repository'):
                 raise StoreConflict('仅自定义研发任务支持主项目工作区模式')
             record['summary'] = {'workspace_mode': workspace_mode}
+            if work_item_id:
+                item = db.execute(select(work_items).where(work_items.c.id == work_item_id,
+                    work_items.c.project_id == project_id).with_for_update()).mappings().first()
+                if item is None:
+                    raise StoreConflict('工作项不存在或不属于当前项目')
+                if not db.scalar(select(requirement_rows.c.id).where(requirement_rows.c.id == item['requirement_id'])):
+                    raise StoreConflict('工作项关联的需求不存在')
+                record['summary'].update(requirement_id=item['requirement_id'], work_item_id=work_item_id)
+            else:
+                req_id = ensure_legacy_requirement(db, project_id)
+                item = insert_work_item(db, project_id, req_id, 'FEATURE',
+                    requirements.strip().splitlines()[0][:120], requirements[:16000], source_run_id=record['id'])
+                record['summary'].update(requirement_id=req_id, work_item_id=item['id'])
             if backend == "configured":
                 config = project.get("context", {}).get("agent_config")
                 if not config:
@@ -237,6 +308,9 @@ class RunStore:
                     raise StoreConflict('缺少项目 Agent 配置，无法恢复')
             summary = {'parent_run_id': parent_id, 'resume_from_task': selected,
                        'resume_seed': {'parent_run_id': parent_id, 'target_task_id': selected, 'tasks': checked}}
+            for key in ('requirement_id', 'work_item_id'):
+                if parent['summary'].get(key):
+                    summary[key] = parent['summary'][key]
             if new_cycle:
                 summary['new_cycle'] = True
                 summary['source_coder_task'] = coder['id']
@@ -272,6 +346,7 @@ class RunStore:
             record.pop("requirements", None)
             record["summary"] = {key: value for key, value in record["summary"].items()
                                  if key in ("status", "error", "iteration_count", "final_test_summary", "elapsed_seconds",
+                                            "requirement_id", "work_item_id",
                                             "parent_run_id", "resume_from_task", "acceptance", "workspace_mode", "delivery")}
         return record
 
@@ -362,6 +437,9 @@ class RunStore:
                 project = db.scalar(select(projects.c.payload).where(projects.c.id == parent['project_id']))
                 snapshot = project.get('context', {}).get('agent_config') if project else None
             summary = {"parent_run_id": parent_id, "chat_context": context_text}
+            for key in ('requirement_id', 'work_item_id'):
+                if parent['summary'].get(key):
+                    summary[key] = parent['summary'][key]
             if requested_action:
                 summary['action'] = requested_action
             if snapshot:
@@ -372,6 +450,67 @@ class RunStore:
             db.execute(runs.insert().values(**record))
             self.event(db, record['id'], 'chat_queued', {"parent_run_id": parent_id})
             return {"id": record['id'], "parent_run_id": parent_id, "status": 'QUEUED'}
+
+    def get_requirement_chat(self, project_id, requirement_id):
+        from .requirements import requirements
+        with self.transaction() as db:
+            if not db.scalar(select(requirements.c.id).where(
+                    requirements.c.id == requirement_id, requirements.c.project_id == project_id)):
+                raise KeyError(requirement_id)
+            rows = db.execute(select(runs).where(runs.c.project_id == project_id,
+                runs.c.template == 'chat', runs.c.summary['requirement_id'].as_string() == requirement_id)
+                .order_by(runs.c.created_at)).mappings()
+            return [{'id': row['id'], 'message': row['requirements'], 'status': row['status'],
+                     'answer': row['summary'].get('answer'), 'error': row['summary'].get('error'),
+                     'resume_run_id': row['summary'].get('resume_run_id'),
+                     'work_item_id': row['summary'].get('work_item_id'),
+                     'created_at': row['created_at']} for row in rows]
+
+    def create_requirement_chat(self, project_id, requirement_id, message):
+        from .requirements import requirements, work_items
+        now = time.time()
+        with self.transaction() as db:
+            project = db.scalar(select(projects.c.payload).where(projects.c.id == project_id))
+            requirement = db.scalar(select(requirements.c.payload).where(
+                requirements.c.id == requirement_id, requirements.c.project_id == project_id))
+            if project is None or requirement is None:
+                raise KeyError(requirement_id)
+            items = [payload for payload, in db.execute(select(work_items.c.payload).where(
+                work_items.c.requirement_id == requirement_id))]
+            related = list(db.execute(select(runs).where(runs.c.project_id == project_id,
+                runs.c.summary['requirement_id'].as_string() == requirement_id)
+                .order_by(runs.c.created_at)).mappings())
+            chats = [row for row in related if row['template'] == 'chat']
+            if any(row['status'] in ('QUEUED', 'RUNNING') for row in chats):
+                raise StoreConflict('上一条讨论仍在处理，请等待回复')
+            if len(chats) >= 200:
+                raise StoreConflict('此需求的讨论已达 200 条上限')
+            if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(['QUEUED', 'RUNNING']))) >= 100:
+                raise StoreConflict('active run capacity reached (100)')
+            context = {'project': project['name'], 'requirement_id': requirement_id,
+                'requirement': requirement.get('document'),
+                'work_items': [{key: item.get(key) for key in ('id', 'kind', 'title', 'description')}
+                               for item in items[-12:]],
+                'runs': [{'id': row['id'], 'status': row['status'],
+                          'work_item_id': row['summary'].get('work_item_id'),
+                          'error': str(row['summary'].get('error') or '')[:3000],
+                          'tasks': [chat_task_evidence(task) for task in row['tasks'][-4:]]}
+                         for row in related if row['template'] not in ('chat', 'prd')][-8:],
+                'discussion': [{'question': row['requirements'][:2000],
+                                'answer': str(row['summary'].get('answer') or '')[:4000]}
+                               for row in chats[-12:]]}
+            config = project.get('context', {}).get('agent_config')
+            backend = 'configured' if config else 'codex'
+            summary = {'requirement_id': requirement_id,
+                       'chat_context': json.dumps(context, ensure_ascii=False)[:48000]}
+            if config:
+                summary['agent_config'] = config
+            record = dict(id=uuid.uuid4().hex, project_id=project_id, status='QUEUED',
+                backend=backend, requirements=message, template='chat', max_retries=0,
+                created_at=now, updated_at=now, generation=0, tasks=[], summary=summary)
+            db.execute(runs.insert().values(**record))
+            self.event(db, record['id'], 'chat_queued', {'requirement_id': requirement_id})
+            return {'id': record['id'], 'requirement_id': requirement_id, 'status': 'QUEUED'}
 
     def get_events(self, run_id, after=0):
         with self.transaction() as db:
@@ -437,7 +576,8 @@ class RunStore:
         with self.transaction() as db:
             row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
             if row:
-                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task', 'workspace_mode')
+                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task', 'workspace_mode',
+                    'requirement_id', 'work_item_id')
                               if key in row['summary']}, **summary}
             if row and row["status"] in ("COMPLETED", "FAILED") and row["worker_id"] == worker_id and row["generation"] == generation and row["summary"] == summary:
                 return
