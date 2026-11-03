@@ -120,4 +120,3 @@ studioSelect.addEventListener('change',()=>{const next=studioSelect.value;if(stu
 studioNewRequirement.addEventListener('click',async()=>{if(studioDirty){studioMessage.textContent='请先保存当前需求草稿。';return;}try{const req=await api(`/v1/projects/${studio.project_id}/requirements`,{method:'POST'});await openStudio(studio.project_id,req.id);}catch(error){studioMessage.textContent=error.message;}});
 raw.addEventListener('input',studioChanged);
 window.addEventListener('beforeunload',event=>{if(studioDirty&&state.view==='requirement-studio'){event.preventDefault();event.returnValue='';}});
-init();

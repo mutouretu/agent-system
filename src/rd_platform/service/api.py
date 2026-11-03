@@ -185,6 +185,9 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         if request.url.path == "/" or request.url.path == "/agents" or request.url.path.startswith("/assets/"):
             response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+            response.headers["Cache-Control"] = "no-store"
+        elif request.url.path.startswith("/v1/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     install_workbench(app)

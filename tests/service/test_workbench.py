@@ -448,9 +448,15 @@ def test_static_ui_and_missing_entities(client):
     home = client.get("/")
     assert home.status_code == 200 and "研发管理控制台" in home.text
     assert "script-src 'self'" in home.headers["content-security-policy"]
+    assert home.headers["cache-control"] == "no-store"
+    assert "/assets/app.js?v=20261103-2" in home.text
+    assert "/assets/studio.js?v=20261103-2" in home.text
+    assert '<option value="all">全部项目</option>' in home.text
     script = client.get("/assets/app.js")
     assert script.status_code == 200 and "EventSource" in script.text
+    assert script.headers["cache-control"] == "no-store"
     assert "innerHTML" not in script.text and "eval(" not in script.text
+    assert client.get("/v1/projects").headers["cache-control"] == "no-store"
     assert client.get("/v1/runs/missing").status_code == 404
     assert client.get("/v1/projects/missing").status_code == 404
     assert client.post("/v1/runs", json={"project_id": "f" * 32, "requirements": "cache"}).status_code == 404

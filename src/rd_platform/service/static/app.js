@@ -98,7 +98,8 @@ function deliveryView(projects,runs) {
 }
 function renderProjects() {
   const query=$('project-search').value.trim().toLocaleLowerCase();
-  const scoped=state.projects.map(projectDisplay).filter(project=>project.localState===$('project-filter').value);
+  const filter=$('project-filter').value;
+  const scoped=state.projects.map(projectDisplay).filter(project=>filter==='all'||project.localState===filter);
   const projects=scoped.filter(project=>[project.id,project.name,project.objective].join(' ').toLocaleLowerCase().includes(query));
   $('search-result-count').textContent=`${projects.length} / ${scoped.length} 个项目`;
   $('search-empty').textContent=query?'没有匹配的项目，请调整搜索条件。':'此分类暂无项目。';
@@ -113,7 +114,9 @@ function renderProjects() {
     title.addEventListener('click', open);
     identity.append(title, node('small','mono',`ID: ${project.id}`));
     if(project.objective) identity.append(node('p','business-objective',project.objective));
-    const status = node('td'); status.append(node('span',`badge ${project.status}`,statusLabels[project.status]));
+    const status = node('td');
+    const displayStatus=project.localState==='archived'?'已归档（本浏览器）':project.localState==='deleted'?'回收站（本浏览器）':statusLabels[project.status];
+    status.append(node('span',`badge ${project.status}`,displayStatus));
     const progress=node('td','package-progress');
     if(project.progress===null) progress.append(node('span','muted','未登记需求包'));
     else { const bar=node('progress'); bar.max=100; bar.value=project.progress; bar.setAttribute('aria-label',`${project.name} 交付完成度 ${project.progress}%`); progress.append(bar,node('strong','',`${project.progress}%`),node('small','',`${project.packages_completed}/${project.packages_total} 需求包`)); }
@@ -686,7 +689,12 @@ async function route() {
   if(project) await openProject(project[1],false,null,project[2] || null); else if(run) await openRun(run[1],false); else showOverview(false);
 }
 window.addEventListener('popstate',route);
-async function init() { try { await Promise.all([refreshOverview(),workerStatus()]); await route(); } catch(error){notice(error.message);} }
+async function init() {
+  $('project-search').value='';
+  $('project-filter').value='all';
+  try { await Promise.all([refreshOverview(),workerStatus()]); await route(); } catch(error){notice(error.message);}
+}
+window.addEventListener('DOMContentLoaded',init,{once:true});
 setInterval(()=>{workerStatus().catch(()=>notice('服务连接中断，请检查 ./scripts/deploy.sh status')); if(state.view==='overview')refreshOverview().catch(()=>{});},10000);
 
 // Three-tier workspace: business-facing collaboration with opt-in execution evidence.
