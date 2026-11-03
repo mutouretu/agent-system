@@ -24,6 +24,7 @@ from rd_platform.manager import AgentRegistry, DispatchConflict, Dispatcher, cre
 from .run_store import RunStore, StoreConflict
 from .workbench import install_workbench, worker_token
 from .requirements import install_requirements
+from .work_items import install_work_items
 
 MAX_BYTES = 1024 * 1024
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -185,10 +186,14 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         if request.url.path == "/" or request.url.path == "/agents" or request.url.path.startswith("/assets/"):
             response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+            response.headers["Cache-Control"] = "no-store"
+        elif request.url.path.startswith("/v1/"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     install_workbench(app)
     install_requirements(app)
+    install_work_items(app)
 
     @app.get("/agents", include_in_schema=False)
     async def agents_page():

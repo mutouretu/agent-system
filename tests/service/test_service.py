@@ -21,10 +21,15 @@ def test_dashboard_keeps_existing_workspace_controls(service):
     client, _ = service
     page = client.get('/')
     assert page.status_code == 200
+    assert page.headers['cache-control'] == 'no-store'
     for element_id in ('project-count', 'stat-passed', 'projects', 'new-project',
-                       'nav-project-group', 'nav-workspace', 'workspace-execution',
+                       'nav-project-group', 'nav-workspace', 'nav-work-items',
+                       'work-items-view', 'work-item-detail', 'work-item-create-dialog',
+                       'work-item-chat-form',
+                       'work-item-accept', 'workspace-execution',
                        'workspace-form', 'nav-agents'):
         assert f'id="{element_id}"' in page.text
+    assert '/assets/work_items.js' in page.text
     assert 'id="agent-management"' not in page.text
     assert 'id="agent-config-dialog"' not in page.text
     assert 'agent_config.js' not in page.text

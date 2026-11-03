@@ -61,37 +61,45 @@ async function api(path, options={}) {
 }
 function badge(status) { return node('span', `badge ${status}`, labels[status] || status); }
 async function refreshOverview() {
-  const [projects,runs]=await Promise.all([api('/v1/projects'),api('/v1/runs')]);
+  const [projects,runs,workItems]=await Promise.all([api('/v1/projects'),api('/v1/runs'),
+    api('/v1/work-items').catch(()=>({work_items:[]}))]);
   state.runs=runs.runs;
-  const data=deliveryView(projects.projects,runs.runs);
+  const data=deliveryView(projects.projects,runs.runs,workItems.work_items);
   state.projects = data.projects;
   const stats=data.stats;
   $('project-count').textContent = state.projects.length;
   $('stat-projects').textContent = stats.active_projects;
-  $('stat-running').textContent = `共 ${stats.projects_total} 个项目 · ${stats.packages_total} 个需求包`;
+  $('stat-running').textContent = `共 ${stats.projects_total} 个项目 · ${stats.packages_total} 个工作项`;
   $('stat-passed').textContent = stats.delivery_percent===null ? '—' : `${stats.delivery_percent}%`;
-  $('packages-summary').textContent = `${stats.packages_delivered} / ${stats.packages_total} 需求包已交付`;
+  $('packages-summary').textContent = `${stats.packages_delivered} / ${stats.packages_total} 工作项已交付`;
   $('delivery-cycle').textContent = stats.average_delivery_seconds===null ? '—' : `${stats.average_delivery_seconds}s`;
   $('stat-failed').textContent = state.projects.filter(project=>project.status==='REVIEW_PENDING').length;
-  $('delivery-footer').textContent = `活跃项目 ${stats.active_projects}　 /　 已交付需求包 ${stats.packages_delivered}　 /　 平均交付周期 ${stats.average_delivery_seconds===null ? '暂无交付记录' : stats.average_delivery_seconds+'s'}`;
+  $('delivery-footer').textContent = `活跃项目 ${stats.active_projects}　 /　 已交付工作项 ${stats.packages_delivered}　 /　 平均交付周期 ${stats.average_delivery_seconds===null ? '暂无交付记录' : stats.average_delivery_seconds+'s'}`;
   $('list-count').textContent = state.projects.length;
   $('empty').classList.toggle('hidden', state.projects.length > 0);
   renderProjects();
   restoreWorkspaceNavigation();
 }
 // Frontend adapter only. Delivery metadata remains optional until backend alignment.
-function deliveryView(projects,runs) {
+function deliveryView(projects,runs,workItems=[]) {
   const cycles=[];
   const items=projects.map(project=>{
     const history=runs.filter(run=>run.project_id===project.id), latest=history[0];
     const delivery=project.context?.delivery || {};
     const packages=Array.isArray(delivery.packages) ? delivery.packages.filter(p=>p && typeof p==='object') : [];
-    const completed=packages.filter(p=>p.status==='COMPLETED').length;
+    const projectItems=workItems.filter(item=>item.project_id===project.id);
+    const completed=projectItems.length?projectItems.filter(item=>item.status==='DELIVERED').length:packages.filter(p=>p.status==='COMPLETED').length;
+    const total=projectItems.length || packages.length;
     const duration=run=>typeof run?.summary?.elapsed_seconds==='number' && Number.isFinite(run.summary.elapsed_seconds) ? Math.max(0,run.summary.elapsed_seconds) : null;
-    for(const p of packages.filter(p=>p.status==='COMPLETED')) { const seconds=duration(history.find(run=>run.id===p.run_id)); if(seconds!==null) cycles.push(seconds); }
-    const status=history.some(run=>['RUNNING','QUEUED'].includes(run.status)) ? 'IN_PROGRESS' : packages.length && completed===packages.length ? 'COMPLETED' : latest?.status==='COMPLETED' ? 'REVIEW_PENDING' : ['FAILED','INTERRUPTED'].includes(latest?.status) ? 'NEEDS_ATTENTION' : 'PLANNED';
+    const deliveredRefs=projectItems.length?projectItems.filter(item=>item.status==='DELIVERED').map(item=>item.latest_run_id):packages.filter(p=>p.status==='COMPLETED').map(p=>p.run_id);
+    for(const id of deliveredRefs) { const seconds=duration(history.find(run=>run.id===id)); if(seconds!==null) cycles.push(seconds); }
+    const status=projectItems.length ?
+      projectItems.some(item=>item.status==='IN_PROGRESS')?'IN_PROGRESS':
+      completed===total?'COMPLETED':
+      projectItems.some(item=>item.status==='AWAITING_ACCEPTANCE')?'REVIEW_PENDING':'NEEDS_ATTENTION' :
+      history.some(run=>['RUNNING','QUEUED'].includes(run.status)) ? 'IN_PROGRESS' : packages.length && completed===packages.length ? 'COMPLETED' : latest?.status==='COMPLETED' ? 'REVIEW_PENDING' : ['FAILED','INTERRUPTED'].includes(latest?.status) ? 'NEEDS_ATTENTION' : 'PLANNED';
     const durations=history.map(duration).filter(value=>value!==null);
-    return {id:project.id,name:project.name,objective:typeof project.context?.requirements==='string'?project.context.requirements:'',milestone:typeof delivery.milestone==='string'?delivery.milestone:null,packages_total:packages.length,packages_completed:completed,progress:packages.length?Math.round(1000*completed/packages.length)/10:null,status,elapsed_seconds:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)*10)/10:null,backend:latest ? latest.backend==='codex'?'codex-cli':latest.backend==='mixed'?'codex + llm':'llm-api':project.context?.preferred_backend==='cli'?'codex-cli':project.context?.preferred_backend==='mixed'?'codex + llm':project.context?.preferred_backend==='llm'?'llm-api':null};
+    return {id:project.id,name:project.name,objective:typeof project.context?.requirements==='string'?project.context.requirements:'',milestone:typeof delivery.milestone==='string'?delivery.milestone:null,packages_total:total,packages_completed:completed,progress:total?Math.round(1000*completed/total)/10:null,status,elapsed_seconds:durations.length?Math.round(durations.reduce((a,b)=>a+b,0)*10)/10:null,backend:latest ? latest.backend==='codex'?'codex-cli':latest.backend==='mixed'?'codex + llm':'llm-api':project.context?.preferred_backend==='cli'?'codex-cli':project.context?.preferred_backend==='mixed'?'codex + llm':project.context?.preferred_backend==='llm'?'llm-api':null};
   });
   const total=items.reduce((n,p)=>n+p.packages_total,0),delivered=items.reduce((n,p)=>n+p.packages_completed,0);
   return {projects:items,stats:{projects_total:items.length,active_projects:items.filter(p=>p.status==='IN_PROGRESS').length,packages_total:total,packages_delivered:delivered,delivery_percent:total?Math.round(1000*delivered/total)/10:null,average_delivery_seconds:cycles.length?Math.round(cycles.reduce((a,b)=>a+b,0)/cycles.length*10)/10:null}};
@@ -115,8 +123,8 @@ function renderProjects() {
     if(project.objective) identity.append(node('p','business-objective',project.objective));
     const status = node('td'); status.append(node('span',`badge ${project.status}`,statusLabels[project.status]));
     const progress=node('td','package-progress');
-    if(project.progress===null) progress.append(node('span','muted','未登记需求包'));
-    else { const bar=node('progress'); bar.max=100; bar.value=project.progress; bar.setAttribute('aria-label',`${project.name} 交付完成度 ${project.progress}%`); progress.append(bar,node('strong','',`${project.progress}%`),node('small','',`${project.packages_completed}/${project.packages_total} 需求包`)); }
+    if(project.progress===null) progress.append(node('span','muted','未登记工作项'));
+    else { const bar=node('progress'); bar.max=100; bar.value=project.progress; bar.setAttribute('aria-label',`${project.name} 交付完成度 ${project.progress}%`); progress.append(bar,node('strong','',`${project.progress}%`),node('small','',`${project.packages_completed}/${project.packages_total} 工作项`)); }
     const elapsed=node('td','mono'); elapsed.append(node('span','',project.elapsed_seconds===null?'—':`${project.elapsed_seconds}s`),node('small','backend-mode',project.backend || '未选择'));
     const action = node('td'); const button = node('button','table-action','进入项目 UI →');
     button.setAttribute('aria-label',`进入项目 UI：${project.name}`);
@@ -203,12 +211,13 @@ function switchView(view, hash, push=true) {
   for(const [id,active] of [
     ['nav-projects',view==='overview'],
     ['nav-requirements',view==='requirement-studio'],
+    ['nav-work-items',view==='work-items-view'||view==='work-item-detail'],
     ['nav-workspace',view==='project-detail'],
   ]) {
     $(id).classList.toggle('active',active);
     if(active) $(id).setAttribute('aria-current','page'); else $(id).removeAttribute('aria-current');
   }
-  for(const id of ['overview','project-detail','detail','requirement-studio']) $(id)?.classList.toggle('hidden',id!==view);
+  for(const id of ['overview','project-detail','detail','requirement-studio','work-items-view','work-item-detail']) $(id)?.classList.toggle('hidden',id!==view);
   if(push && location.hash!==hash) history.pushState(null,'',location.pathname+hash);
   return navigation;
 }
@@ -594,6 +603,9 @@ $('download').addEventListener('click',()=>{
   const url=URL.createObjectURL(blob); const link=node('a'); link.href=url; link.download=`run-${state.current.id}.json`; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 async function route() {
+  const workItem=location.hash.match(/^#work-item\/([a-f0-9]{32})$/);
+  if(workItem) return openWorkItem(workItem[1],false);
+  if(location.hash==='#work-items') return openWorkItems(false);
   const prd=location.hash.match(/^#requirements\/([a-f0-9]{32})\/([a-f0-9]{32})$/);
   if(prd) return openStudio(prd[1],prd[2],false);
   if(location.hash==='#development') return openDevelopment(false);
@@ -602,7 +614,7 @@ async function route() {
 }
 window.addEventListener('popstate',route);
 async function init() { try { await Promise.all([refreshOverview(),workerStatus()]); await route(); } catch(error){notice(error.message);} }
-init();
+window.addEventListener('DOMContentLoaded',init,{once:true});
 setInterval(()=>{workerStatus().catch(()=>notice('服务连接中断，请检查 ./scripts/deploy.sh status')); if(state.view==='overview')refreshOverview().catch(()=>{});},10000);
 
 // Three-tier workspace: business-facing collaboration with opt-in execution evidence.

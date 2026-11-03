@@ -29,6 +29,11 @@ events = Table("workbench_events", metadata,
 workers = Table("workbench_workers", metadata,
     Column("id", String(64), primary_key=True), Column("last_seen", Float, nullable=False),
     Column("backends", JSON, nullable=False))
+work_item_acceptance = Table("workbench_work_item_acceptance", metadata,
+    Column("run_id", ForeignKey(runs.c.id), primary_key=True),
+    Column("revision", Integer, nullable=False, default=0),
+    Column("accepted_run_id", ForeignKey(runs.c.id)),
+    Column("accepted_at", Float))
 TERMINAL = {"COMPLETED", "FAILED", "INTERRUPTED"}
 LEASE_SECONDS = 90
 
@@ -134,14 +139,18 @@ class RunStore:
         stale = db.execute(select(runs.c.id, runs.c.summary).where(runs.c.status == "RUNNING", runs.c.lease_until < time.time())
                            .with_for_update(skip_locked=True)).all()
         for run_id, previous in stale:
-            summary = {**{key: previous[key] for key in ('agent_config', 'parent_run_id', 'workspace_mode') if key in previous},
+            summary = {**{key: previous[key] for key in ('agent_config', 'parent_run_id', 'workspace_mode',
+                       'work_item_id', 'work_item_kind', 'work_item_title', 'work_item_description',
+                       'work_item_criteria', 'work_item_note', 'requirement_id') if key in previous},
                        "status": "FAILED", "error": "Worker lease expired; inspect evidence and resume from a checkpoint"}
             db.execute(runs.update().where(runs.c.id == run_id).values(status="INTERRUPTED", summary=summary,
                        updated_at=time.time(), generation=runs.c.generation + 1))
             self.event(db, run_id, "run_finished", {"status": "INTERRUPTED", "error": summary["error"]})
 
     def create_run(self, project_id, backend, requirements, template="custom", max_retries=3,
-                   workspace_mode='isolated'):
+                   workspace_mode='isolated', work_item_id=None, requirement_id=None,
+                   work_item_kind=None, work_item_title=None, work_item_description=None,
+                   work_item_criteria=None, work_item_note=None):
         now = time.time()
         record = dict(id=uuid.uuid4().hex, project_id=project_id, status="QUEUED", backend=backend,
                       requirements=requirements, template=template, max_retries=max_retries,
@@ -153,6 +162,28 @@ class RunStore:
             if workspace_mode not in ('isolated', 'repository') or (template != 'custom' and workspace_mode == 'repository'):
                 raise StoreConflict('仅自定义研发任务支持主项目工作区模式')
             record['summary'] = {'workspace_mode': workspace_mode}
+            if work_item_id:
+                parent = db.execute(select(runs.c.project_id, runs.c.template, runs.c.status).where(runs.c.id == work_item_id)
+                                    .with_for_update()).first()
+                if parent is None or parent.project_id != project_id or parent.template in ('chat', 'prd', 'resume'):
+                    raise StoreConflict('工作项会话不属于此项目')
+                if parent.status in ('QUEUED', 'RUNNING') or db.scalar(select(runs.c.id).where(
+                    runs.c.summary['work_item_id'].as_string() == work_item_id,
+                    runs.c.status.in_(['QUEUED', 'RUNNING'])).limit(1)):
+                    raise StoreConflict('当前工作项已有正在执行的运行')
+                record['summary']['work_item_id'] = work_item_id
+            if requirement_id:
+                record['summary']['requirement_id'] = requirement_id
+            if work_item_kind:
+                record['summary']['work_item_kind'] = work_item_kind
+            if work_item_title:
+                record['summary']['work_item_title'] = work_item_title
+            if work_item_description:
+                record['summary']['work_item_description'] = work_item_description
+            if work_item_criteria is not None:
+                record['summary']['work_item_criteria'] = work_item_criteria
+            if work_item_note:
+                record['summary']['work_item_note'] = work_item_note
             if backend == "configured":
                 config = project.get("context", {}).get("agent_config")
                 if not config:
@@ -272,7 +303,8 @@ class RunStore:
             record.pop("requirements", None)
             record["summary"] = {key: value for key, value in record["summary"].items()
                                  if key in ("status", "error", "iteration_count", "final_test_summary", "elapsed_seconds",
-                                            "parent_run_id", "resume_from_task", "acceptance", "workspace_mode", "delivery")}
+                                            "parent_run_id", "resume_from_task", "acceptance", "workspace_mode", "delivery",
+                                            "work_item_id", "work_item_kind", "work_item_title", "requirement_id")}
         return record
 
     def get_run(self, run_id):
@@ -437,7 +469,9 @@ class RunStore:
         with self.transaction() as db:
             row = db.execute(select(runs).where(runs.c.id == run_id).with_for_update()).mappings().first()
             if row:
-                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task', 'workspace_mode')
+                summary = {**{key: row['summary'][key] for key in ('agent_config', 'parent_run_id', 'resume_from_task', 'workspace_mode',
+                           'work_item_id', 'work_item_kind', 'work_item_title', 'work_item_description',
+                           'work_item_criteria', 'work_item_note', 'requirement_id')
                               if key in row['summary']}, **summary}
             if row and row["status"] in ("COMPLETED", "FAILED") and row["worker_id"] == worker_id and row["generation"] == generation and row["summary"] == summary:
                 return

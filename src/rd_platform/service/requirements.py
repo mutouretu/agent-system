@@ -67,7 +67,7 @@ def install_requirements(app):
             raise HTTPException(404, 'requirement not found')
         return row['payload']
 
-    def enqueue(db, project_id, text, backend, template='custom'):
+    def enqueue(db, project_id, text, backend, template='custom', requirement_id=None):
         if len(text) > 16000:
             raise HTTPException(422, '需求上下文超过 16000 字符，请精简后重试')
         if db.scalar(select(func.count()).select_from(runs).where(runs.c.status.in_(['QUEUED', 'RUNNING']))) >= 100:
@@ -75,7 +75,8 @@ def install_requirements(app):
         now = time.time()
         record = dict(id=uuid.uuid4().hex, project_id=project_id, status='QUEUED', backend=backend,
                       requirements=text, template=template, max_retries=3, created_at=now, updated_at=now,
-                      generation=0, tasks=[], summary={})
+                      generation=0, tasks=[], summary={'requirement_id': requirement_id,
+                          'work_item_kind': 'FEATURE'} if requirement_id else {})
         db.execute(runs.insert().values(**record))
         store().event(db, record['id'], 'run_queued', {'status': 'QUEUED', 'backend': backend})
         return record
@@ -117,7 +118,7 @@ def install_requirements(app):
             workspace = dict(context.get('workspace', {'revision': 0, 'milestones': [], 'accepted': []}))
             if submit:
                 text = json.dumps(document, ensure_ascii=False)
-                run = enqueue(db, project_id, text, request.backend)
+                run = enqueue(db, project_id, text, request.backend, requirement_id=req_id)
                 payload.update(run_id=run['id'], submitted_revision=payload['revision'])
                 milestones = [m for m in workspace['milestones'] if m.get('run_id') != old.get('run_id') or not old.get('run_id')]
                 milestones.append({'name': document['title'][:128], 'goal': document['business_context'],

@@ -286,6 +286,9 @@ def test_resume_review_queues_checkpoint_without_mutating_parent(client, resume_
     child = response.json()
     assert child['template'] == 'resume' and child['status'] == 'QUEUED'
     assert child['summary']['parent_run_id'] == parent['id']
+    item = client.get(f"/v1/work-items/{parent['id']}").json()
+    assert set(item['run_ids']) == {parent['id'], child['id']}
+    assert item['status'] == 'IN_PROGRESS'
     assert 'resume_seed' not in child['summary']
     listed = client.get('/v1/runs', params={'project_id': parent['project_id']}).json()['runs']
     assert next(item for item in listed if item['id'] == child['id'])['summary']['parent_run_id'] == parent['id']

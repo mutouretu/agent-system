@@ -1,5 +1,5 @@
 'use strict';
-let studio=null, studioBusy=false, studioFilter='ALL', studioDirty=false, studioPoll=null;
+let studio=null, studioBusy=false, studioFilter='ALL', studioDirty=false, studioPoll=null, studioWorkItems=[];
 const studioView=node('section','view hidden'); studioView.id='requirement-studio';
 document.querySelector('main>footer').before(studioView);
 const studioBack=node('button','quiet','← 返回项目开发'); studioBack.addEventListener('click',()=>{if(studio) openProject(studio.project_id);});
@@ -18,7 +18,11 @@ const filters=node('div','studio-filters'); for(const [value,text] of [['ALL','�
 const addPackage=node('button','table-action','＋ 添加功能包');addPackage.addEventListener('click',()=>{studio.document.feature_packages.push({id:'PKG-'+crypto.randomUUID().slice(0,8),name:'',description:'',priority:'P1',group:'新模块'});studioChanged();renderPackages();});packageHead.append(filters,addPackage);
 const packageList=node('div');packageList.id='studio-packages';packagePanel.append(packageHead,packageList);
 const criteriaPanel=node('section','studio-panel');criteriaPanel.append(node('h2','','业务验收条件'),node('p','field-note','勾选代表人工验收确认；保存后同步项目交付面板。AI 不会替你确认。'));
-const criteriaList=node('div');criteriaList.id='studio-criteria'; const addCriterion=node('button','table-action','＋ 添加验收条件'); addCriterion.addEventListener('click',()=>{studio.document.acceptance_criteria.push('');studioChanged();renderCriteria();});criteriaPanel.append(criteriaList,addCriterion);studioMain.append(packagePanel,criteriaPanel);
+const criteriaList=node('div');criteriaList.id='studio-criteria'; const addCriterion=node('button','table-action','＋ 添加验收条件'); addCriterion.addEventListener('click',()=>{studio.document.acceptance_criteria.push('');studioChanged();renderCriteria();});criteriaPanel.append(criteriaList,addCriterion);
+const workItemPanel=node('section','studio-panel');workItemPanel.append(node('h2','','关联工作项'),node('p','field-note','本需求提交形成的开发会话；点击进入单项工作区。'));
+const studioWorkItemList=node('div');studioWorkItemList.id='studio-work-items';workItemPanel.append(studioWorkItemList);
+const studioCreateWorkItem=node('button','secondary','＋ 创建工作项');studioCreateWorkItem.addEventListener('click',()=>{if(studioDirty){studioMessage.textContent='请先保存当前需求草稿。';return;}openCreateWorkItem(studio.project_id,studio.id);});workItemPanel.append(studioCreateWorkItem);
+studioMain.append(workItemPanel,packagePanel,criteriaPanel);
 const metadataPanel=node('section','studio-panel'); const reqId=node('p','mono');reqId.id='studio-id'; metadataPanel.append(node('h2','','需求元数据'),reqId);
 for(const [id,text,tag] of [['studio-title','需求名称','input'],['studio-context','核心业务目标','textarea']]){ const label=node('label','',text),field=node(tag);field.id=id;field.maxLength=id==='studio-title'?512:4000;if(tag==='textarea')field.rows=6;field.addEventListener('input',()=>{studio.document[id==='studio-title'?'title':'business_context']=field.value;studioChanged();});label.append(field);metadataPanel.append(label); }
 const reviewPanel=node('section','studio-panel studio-review'); reviewPanel.append(node('h2','','Architect 智能审校'));
@@ -34,14 +38,17 @@ async function openStudio(projectId,reqId,push=true){
   if(studioDirty && state.view==='requirement-studio') {notice('请先保存当前需求草稿再切换。');return;}
   const navigation=switchView('requirement-studio',`#requirements/${projectId}/${reqId}`,push);
   clearTimeout(studioPoll); studio=null;studioMessage.textContent='正在加载需求…';setStudioBusy(true);
-  try {const [req,project]=await Promise.all([api(`/v1/projects/${projectId}/requirements/${reqId}`),api(`/v1/projects/${projectId}`)]);if(navigation!==state.navigation)return;
-    studio={...req,document:req.document || emptyPRD()};state.project=project;studioDirty=false;studioFilter='ALL';raw.value='';studioBackend.value=project.context?.preferred_backend==='mixed'?'mixed':project.context?.preferred_backend==='llm'?'llm':'codex';$('breadcrumb-current').textContent='需求管理 / PRD 工作台';renderStudio();studioMessage.textContent=`已加载草稿 · 版本 ${studio.revision}`;setStudioBusy(false);
+  try {const [req,project,items]=await Promise.all([api(`/v1/projects/${projectId}/requirements/${reqId}`),api(`/v1/projects/${projectId}`),api(`/v1/work-items?requirement_id=${reqId}`)]);if(navigation!==state.navigation)return;
+    studio={...req,document:req.document || emptyPRD()};state.project=project;studioWorkItems=items.work_items;studioDirty=false;studioFilter='ALL';raw.value='';studioBackend.value=project.context?.preferred_backend==='mixed'?'mixed':project.context?.preferred_backend==='llm'?'llm':'codex';$('breadcrumb-current').textContent='需求管理 / PRD 工作台';renderStudio();studioMessage.textContent=`已加载草稿 · 版本 ${studio.revision}`;setStudioBusy(false);
     if(req.analysis_id) pollAnalysis(req.analysis_id,navigation);
   }catch(error){if(navigation===state.navigation){studioMessage.textContent=error.message;}}
 }
 function renderStudio(){
   $('studio-title').value=studio.document.title;$('studio-context').value=studio.document.business_context;reqId.textContent=`REQ-${studio.id.slice(0,8)}\n${studio.id}`;
   chat.replaceChildren();for(const message of studio.messages){const card=node('article','message');card.append(node('strong','',message.role==='architect'?'Architect':'你'),node('p','message-content',message.content));chat.append(card);}if(!studio.messages.length)chat.append(node('p','muted','粘贴原始需求或提出问题。Architect 会整理条款、识别遗漏并回填结构化表单。'));
+  studioWorkItemList.replaceChildren();
+  if(!studioWorkItems.length)studioWorkItemList.append(node('p','muted','尚无工作项。提交需求后将在此生成开发会话。'));
+  for(const item of studioWorkItems){const button=node('button','table-action',`${item.title} · ${item.id.slice(0,8)} · ${item.status}`);button.addEventListener('click',()=>openWorkItem(item.id));studioWorkItemList.append(button);}
   renderPackages();renderCriteria();renderStudioReview();
 }
 function renderPackages(){
@@ -80,7 +87,7 @@ async function saveStudio(submit=false){
     const payload=studioPayload();if(submit)payload.backend=studioBackend.value;
     const result=await api(`/v1/projects/${studio.project_id}/requirements/${studio.id}${submit?'/submit':''}`,{method:submit?'POST':'PUT',body:JSON.stringify(payload)});
     if(navigation!==state.navigation)return;studio=result;studioDirty=false;renderStudio();studioMessage.textContent='草稿已保存，验收条件已同步至项目工作区。';
-    if(submit){await openProject(result.project_id,true,result.run_id);}
+    if(submit){await openWorkItem(result.run_id);}
   }catch(error){if(navigation===state.navigation)studioMessage.textContent=error.message;}finally{setStudioBusy(false);}
 }
 studioSave.addEventListener('click',()=>saveStudio());studioSubmit.addEventListener('click',()=>saveStudio(true));
