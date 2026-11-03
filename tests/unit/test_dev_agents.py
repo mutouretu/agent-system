@@ -298,6 +298,18 @@ def test_coder_accepts_matching_failed_test_evidence_after_approved_review():
     assert len(backend.calls) == 1
 
 
+def test_coder_repair_preserves_omitted_candidate_files_and_tests():
+    partial = {'files': {'src/new.py': 'VALUE = 2\n'},
+               'tests': {'tests/test_new.py': 'def test_new(): assert True\n'},
+               'commit_message': 'repair'}
+    result = run(dev.CoderAgent(FakeGenerator(partial)),
+                 {'architecture': architecture(), 'previous_code': code(), 'review': review(False),
+                  'operator_guidance': 'Keep existing files and wire the missing route.'})
+    assert result.status == AgentStatus.COMPLETED
+    assert set(result.artifacts['files']) == {'src/cache.py', 'src/new.py'}
+    assert set(result.artifacts['tests']) == {'tests/test_cache.py', 'tests/test_new.py'}
+
+
 def test_unconfigured_roles_are_blocked_and_tester_does_not_invent_metrics():
     assert run(dev.ArchitectAgent(), {"requirements": "build"}).status == AgentStatus.BLOCKED
     assert run(dev.CoderAgent(), {"architecture": architecture()}).status == AgentStatus.BLOCKED

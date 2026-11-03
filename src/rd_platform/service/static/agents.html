@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>RD Platform · Agent 管理</title><link rel="stylesheet" href="/assets/app.css"><link rel="stylesheet" href="/assets/agents_page.css"><script src="/assets/agents_page.js" defer></script></head>
+<body>
+<aside class="sidebar">
+  <a class="brand" href="/"><span class="brand-icon">RD</span><span>研发管理平台<small>OPERATIONS CONSOLE</small></span></a>
+  <div class="workspace-label">资源管理</div>
+  <nav aria-label="项目导航">
+    <a class="nav-item" href="/"><span>▦</span> 项目列表</a>
+    <a class="nav-item" href="/#development"><span>⌁</span> 项目开发</a>
+  </nav>
+  <a class="nav-item active" href="/agents" aria-current="page"><span>⚙</span> Agent 管理</a>
+  <a class="nav-item" href="/docs" target="_blank" rel="noopener"><span>⌘</span> API 文档 <span class="external">↗</span></a>
+  <div class="sidebar-bottom"><div class="local-mark">LOCAL ENVIRONMENT</div><p>本地研发环境<br><span>Docker 隔离执行</span></p><div class="version">rd_platform <span>v0.3.0</span></div></div>
+</aside>
+<main>
+  <header class="topbar"><div class="breadcrumb">控制台 <span>/</span> <strong>Agent 管理</strong></div><div class="connection"><span class="environment">LOCAL</span></div></header>
+  <section class="view">
+    <div class="page-heading"><div><div class="eyebrow">AGENT CONFIGURATION</div><h1>Agent 管理</h1><p>为项目配置四个角色的运行方式与职责；保存后用于下一次团队研发运行。</p></div></div>
+    <div class="agents-toolbar">
+      <label for="agents-project">选择项目<select id="agents-project" disabled><option value="">加载中…</option></select></label>
+      <button type="button" class="secondary" id="agents-refresh" disabled>↻ 重新加载</button>
+    </div>
+    <p id="agents-status" class="field-note" role="status"></p>
+    <p id="agents-error" class="field-error" role="alert"></p>
+    <form id="agents-form">
+      <div id="agents-release" class="agents-release" role="status"></div>
+      <div id="agents-cards" class="agents-cards"></div>
+      <div class="agents-actions"><button type="submit" class="primary" id="agents-save" disabled>保存角色配置</button></div>
+    </form>
+    <p class="field-note">模型 API Key 由本地 Worker 配置提供，本页面不会存储或展示任何密钥。测试者固定通过 Docker 沙箱执行，无独立模型调用。</p>
+  </section>
+  <footer>RD PLATFORM / OPERATIONS CONSOLE <span>本地环境 · 研发任务与执行证据管理</span></footer>
+</main>
+</body></html>

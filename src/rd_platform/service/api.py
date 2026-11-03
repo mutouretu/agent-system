@@ -14,6 +14,7 @@ import tempfile
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
@@ -25,6 +26,8 @@ from .workbench import install_workbench, worker_token
 from .requirements import install_requirements
 
 MAX_BYTES = 1024 * 1024
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+AGENTS_PAGE = STATIC_DIR / "agents.html"
 
 
 @dataclass(frozen=True)
@@ -180,12 +183,16 @@ def create_app(settings=None, *, registry: AgentRegistry | None = None):
             return JSONResponse({"detail": "cross-origin mutation is not allowed"}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        if request.url.path == "/" or request.url.path.startswith("/assets/"):
+        if request.url.path == "/" or request.url.path == "/agents" or request.url.path.startswith("/assets/"):
             response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
         return response
 
     install_workbench(app)
     install_requirements(app)
+
+    @app.get("/agents", include_in_schema=False)
+    async def agents_page():
+        return FileResponse(AGENTS_PAGE, media_type="text/html")
 
     @app.get("/v1/projects")
     async def list_projects():

@@ -130,6 +130,9 @@ def test_new_repair_cycle_reuses_latest_valid_code_and_review(client):
         'subtasks': [{'id': 'feature', 'description': 'build', 'acceptance_criteria': ['works']}]}
     tasks = [
         {'id': 'architect', 'capability': 'architecture', 'status': 'COMPLETED', 'output': architecture},
+        {'id': 'coder-02', 'capability': 'coding', 'status': 'COMPLETED', 'output': code.model_dump()},
+        {'id': 'reviewer-02', 'capability': 'review', 'status': 'COMPLETED', 'output': review.model_dump()},
+        {'id': 'tester-02', 'capability': 'testing', 'status': 'BLOCKED', 'output': None},
         {'id': 'coder-03', 'capability': 'coding', 'status': 'COMPLETED', 'output': code.model_dump()},
         {'id': 'reviewer-03', 'capability': 'review', 'status': 'COMPLETED', 'output': review.model_dump()},
         {'id': 'tester-03', 'capability': 'testing', 'status': 'BLOCKED', 'output': None},
@@ -137,11 +140,13 @@ def test_new_repair_cycle_reuses_latest_valid_code_and_review(client):
     store = client.app.state.run_store
     with store.transaction() as db:
         db.execute(runs.update().where(runs.c.id == run['id']).values(status='FAILED', tasks=tasks))
-    response = client.post(f"/v1/runs/{run['id']}/resume", json={'new_cycle': True})
+    response = client.post(f"/v1/runs/{run['id']}/resume", json={
+        'new_cycle': True, 'task_id': 'coder-02', 'operator_guidance': 'Register the /agents route.'})
     assert response.status_code == 202, response.text
     child = response.json()
     assert child['summary']['resume_from_task'] == 'tester-00'
-    assert child['summary']['source_coder_task'] == 'coder-03'
+    assert child['summary']['source_coder_task'] == 'coder-02'
+    assert child['summary']['operator_guidance'] == 'Register the /agents route.'
     with store.transaction() as db:
         queued = db.execute(select(runs.c.summary).where(runs.c.id == child['id'])).scalar_one()
     assert [task['id'] for task in queued['resume_seed']['tasks']] == [

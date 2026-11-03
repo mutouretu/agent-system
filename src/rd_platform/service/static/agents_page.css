@@ -1,0 +1,16 @@
+/* Independent Agent management page; supplements app.css without altering it. */
+.agents-toolbar{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.agents-toolbar label{display:flex;flex-direction:column;gap:6px;color:var(--muted);font-size:12px;min-width:260px}
+.agents-toolbar select{background:#0f1c2c;border:1px solid var(--border);border-radius:4px;color:var(--ink);padding:8px 10px;max-width:420px}
+.agents-release{min-height:1.6em;color:var(--muted);font-size:12px;margin-bottom:12px}
+.agents-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.agents-card{border:1px solid var(--border);border-radius:6px;background:var(--paper);padding:16px;display:flex;flex-direction:column;gap:10px}
+.agents-card h2{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.agents-card .agents-role-tag{font:10px var(--mono);color:var(--accent);letter-spacing:1px;border:1px solid #277e96;border-radius:3px;padding:2px 6px}
+.agents-card label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:12px}
+.agents-card select,.agents-card input,.agents-card textarea{width:100%;background:#0f1c2c;border:1px solid var(--border);border-radius:4px;color:var(--ink);padding:7px 9px}
+.agents-card textarea{resize:vertical;min-height:64px}
+.agents-card .field-note{margin:0;font-size:11px;line-height:1.5}
+.agents-actions{display:flex;justify-content:flex-end;margin-top:18px}
+.agents-empty{border:1px dashed var(--border);border-radius:6px;padding:24px;color:var(--muted);text-align:center}
+@media(max-width:720px){.agents-cards{grid-template-columns:1fr}.agents-toolbar label{min-width:0;width:100%}}

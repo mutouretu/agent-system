@@ -36,7 +36,7 @@ class SoftwareTeamWorkflow:
             registry.register(agent)
         self.dispatcher = Dispatcher(registry, task_timeout=task_timeout)
 
-    async def run(self, requirements, *, resume_seed=None):
+    async def run(self, requirements, *, resume_seed=None, operator_guidance=None):
         project = Project("Software R&D team", context={"requirements": requirements})
         summary = {"status": "FAILED", "max_retries": self.max_retries, "iteration_count": 0,
                    "attempts": [], "evidence_dir": str(self.directory), "project_id": project.id}
@@ -86,6 +86,8 @@ class SoftwareTeamWorkflow:
             for iteration in range(self.max_retries + 1):
                 summary["iteration_count"] = iteration
                 payload = {"instructions": requirements}
+                if operator_guidance:
+                    payload["operator_guidance"] = operator_guidance
                 dependencies = [architect.id]
                 if previous_code is not None:
                     dependencies.extend([previous_code.id, previous_review.id])

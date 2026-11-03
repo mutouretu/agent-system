@@ -25,7 +25,6 @@ def test_dashboard_keeps_existing_workspace_controls(service):
                        'nav-project-group', 'nav-workspace', 'workspace-execution',
                        'workspace-form', 'agent-config-dialog'):
         assert f'id="{element_id}"' in page.text
-    assert 'href="/agents"' not in page.text
 
 
 @pytest.fixture
