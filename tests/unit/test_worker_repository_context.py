@@ -7,7 +7,7 @@ def test_ui_context_prioritizes_existing_page_and_api(tmp_path):
     files = {
         'src/rd_platform/service/static/index.html': '<html>existing sidebar and project UI</html>',
         'src/rd_platform/service/api.py': 'def create_app():\n    return app\n\napp = create_app()\n',
-        'src/rd_platform/service/static/agent_config.js': 'const roleConfig = true;',
+        'src/rd_platform/service/static/app.js': 'const workspace = true;',
         'src/rd_platform/service/static/app.css': ':root { --bg: #080d15; }',
         'tests/service/test_workbench.py': 'agent page ' * 300,
     }

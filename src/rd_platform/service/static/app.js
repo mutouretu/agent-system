@@ -222,7 +222,7 @@ async function openProject(id, push=true, selectedRun=null) {
   $('project-detail').classList.remove('development-unselected');
   $('development-empty').classList.add('hidden');
   state.project=null; state.projectRuns=[];
-  for(const key of ['lead-messages','feature-flow','feature-contracts','acceptance-checklist','milestone-rows']) $(key)?.replaceChildren();
+  for(const key of ['lead-messages','feature-flow','feature-contracts','acceptance-checklist']) $(key)?.replaceChildren();
   $('project-title').textContent='加载项目…'; $('project-id').textContent=id;
   $('project-start').disabled=true; $('project-refresh').disabled=true;
   for(const key of ['project-tasks','project-runs','project-latest-status']) $(key).replaceChildren();
@@ -235,7 +235,7 @@ async function openProject(id, push=true, selectedRun=null) {
   try {
     const [project, history, agentConfig]=await Promise.all([api(`/v1/projects/${id}`),api(`/v1/runs?project_id=${encodeURIComponent(id)}`),api(`/v1/projects/${id}/agents/config`)]);
     if(navigation!==state.navigation) return;
-    state.project=project; state.projectRuns=history.runs; state.agentConfig=agentConfig; renderProject(); renderAgentConfig();
+    state.project=project; state.projectRuns=history.runs; state.agentConfig=agentConfig; renderProject();
     if(!drafts.has(id) && typeof project.context?.requirements==='string') $('workspace-requirements').value=project.context.requirements;
     if(project.context?.preferred_backend) $('workspace-backend').value=project.context.preferred_backend==='cli'?'codex':project.context.preferred_backend;
     if(agentConfig.revision > 0) $('workspace-backend').value='configured';
@@ -648,49 +648,14 @@ continueButton.addEventListener('click',async()=>{
   } catch(error) { $('workspace-error').textContent=error.message; }
   finally { submittingChat=false; if(state.current) renderWorkspace(); }
 });
-const milestonesPanel=node('section','project-panel milestones-panel');
-const milestoneHeading=node('div','section-heading'); milestoneHeading.append(node('h2','','开发里程碑与需求包'));
-const addMilestone=node('button','secondary','＋ 添加节点'); addMilestone.addEventListener('click',()=>editMilestone(null)); milestoneHeading.append(addMilestone);
-const milestoneRows=node('div'); milestoneRows.id='milestone-rows';
-milestonesPanel.append(milestoneHeading,milestoneRows,node('p','field-note','研发进度来自关联运行的角色阶段；人工验收独立记录，不以测试通过替代业务确认。'));
-leadPanel.after(milestonesPanel);
 const evidenceDisclosure=node('details','technical-evidence'); evidenceDisclosure.append(node('summary','','技术证据与源码（按需展开）'));
 $('workspace-execution').before(evidenceDisclosure); evidenceDisclosure.append($('workspace-execution'));
-const milestoneDialog=node('dialog'); milestoneDialog.id='milestone-dialog';
-const milestoneForm=node('form');
-const milestoneTitle=node('h2','','编辑节点 / 调整功能'); milestoneForm.append(milestoneTitle);
-for(const [id,title,type] of [['milestone-name','节点名称','input'],['milestone-goal','目标描述','textarea'],['milestone-packages','需求包清单（每行一项）','textarea'],['milestone-run','关联研发记录','select']]) {
-  const label=node('label','',title), field=node(type); field.id=id;
-  if(type!=='select') { field.maxLength=id==='milestone-name'?128:id==='milestone-goal'?4000:16000; field.required=id!=='milestone-goal'; }
-  label.append(field); milestoneForm.append(label);
-}
-const milestoneError=node('p','field-error'); milestoneError.setAttribute('role','alert');
-const milestoneSave=node('button','primary','保存节点'), milestoneCancel=node('button','secondary','取消'); milestoneCancel.type='button'; milestoneCancel.addEventListener('click',()=>milestoneDialog.close());
-milestoneForm.append(milestoneError,milestoneCancel,milestoneSave); milestoneDialog.append(milestoneForm); document.body.append(milestoneDialog);
-let editingMilestone=null, milestoneProject=null;
 function workspaceData() { return state.project?.context?.workspace || {revision:0,milestones:[],accepted:[]}; }
 async function persistWorkspace(next) {
   const id=state.project.id, navigation=state.navigation;
   const project=await api(`/v1/projects/${id}/workspace`,{method:'PUT',body:JSON.stringify(next)});
   if(state.project?.id===id && state.navigation===navigation) { state.project=project; renderProductWorkspace(); }
 }
-function editMilestone(index) {
-  editingMilestone=index; milestoneProject=state.project.id; milestoneError.textContent='';
-  const item=index===null?{}:workspaceData().milestones[index];
-  $('milestone-name').value=item.name || ''; $('milestone-goal').value=item.goal || ''; $('milestone-packages').value=(item.packages || []).join('\n');
-  const select=$('milestone-run'); select.replaceChildren(); const none=node('option','','未关联（待规划）'); none.value=''; select.append(none);
-  for(const run of state.projectRuns) { const option=node('option','',`${stamp(run.created_at)} · ${labels[run.status]}`); option.value=run.id; select.append(option); }
-  select.value=item.run_id || ''; milestoneDialog.showModal();
-}
-milestoneForm.addEventListener('submit',async event=>{
-  event.preventDefault(); if(state.project?.id!==milestoneProject) return;
-  const name=$('milestone-name').value.trim(), packages=$('milestone-packages').value.split('\n').map(x=>x.trim()).filter(Boolean);
-  if(!name || !packages.length || packages.length>100 || packages.some(x=>x.length>512)) { milestoneError.textContent='请填写节点名称及 1–100 个需求包，每项最多 512 字。'; return; }
-  const data=workspaceData(), milestones=[...data.milestones], item={name,goal:$('milestone-goal').value.trim(),packages,run_id:$('milestone-run').value || null};
-  if(editingMilestone===null) milestones.push(item); else milestones[editingMilestone]=item;
-  milestoneSave.disabled=true;
-  try { await persistWorkspace({...data,milestones}); milestoneDialog.close(); } catch(error) { milestoneError.textContent=error.message; } finally { milestoneSave.disabled=false; }
-});
 function renderProductWorkspace() {
   if(!state.project) return;
   const run=state.current, data=workspaceData(), tasks=run?.tasks || [];
@@ -753,21 +718,6 @@ function renderProductWorkspace() {
     check.addEventListener('change',async()=>{ check.disabled=true; try { const current=workspaceData(), accepted=new Set(current.accepted); if(check.checked) accepted.add(key); else accepted.delete(key); await persistWorkspace({...current,accepted:[...accepted]}); } catch(error) { check.checked=!check.checked; notice(error.message); } finally { check.disabled=false; } });
     label.append(check,node('span','',criterion)); $('acceptance-checklist').append(label);
   }
-  milestoneRows.replaceChildren();
-  if(!data.milestones.length) milestoneRows.append(node('p','panel-empty','尚未规划里程碑。添加节点并关联研发记录，即可跟踪真实执行进度。'));
-  data.milestones.forEach((item,index)=>{
-    const linked=item.run_id===run?.id?run:state.projectRuns.find(r=>r.id===item.run_id);
-    const latestRoles=roles.map(([capability])=>[...(linked?.tasks || [])].reverse().find(t=>t.capability===capability));
-    const done=latestRoles.filter(t=>t?.status==='COMPLETED' && t?.output?.review_status!=='REJECTED').length;
-    const progress=linked?.status==='COMPLETED'?100:Math.min(75,done*25);
-    const status=linked?.status==='COMPLETED'?'COMPLETED':linked && ['RUNNING','QUEUED'].includes(linked.status)?'IN PROGRESS':linked && ['FAILED','INTERRUPTED'].includes(linked.status)?'需跟进':'PLANNED';
-    const row=node('article','milestone-row'), title=node('div'); title.append(node('strong','',item.name),node('p','muted',item.goal));
-    const packages=node('ul'); item.packages.forEach(p=>packages.append(node('li','',p)));
-    const completion=node('div'), bar=node('progress'); bar.max=100; bar.value=progress; bar.setAttribute('aria-label',`${item.name} 研发阶段进度`); completion.append(bar,node('p','',`${progress}% · ${status}`));
-    if(linked?.status==='COMPLETED') completion.append(node('small','muted','研发验证完成 · 业务验收见清单'));
-    const edit=node('button','table-action','编辑节点 / 调整功能'); edit.addEventListener('click',()=>editMilestone(index));
-    row.append(title,packages,completion,edit); milestoneRows.append(row);
-  });
 }
 
 function businessRequirementText(text) {
@@ -782,7 +732,7 @@ function businessRequirementText(text) {
 // Polling supplements SSE, and refreshes planning changes made in another browser.
 let workspacePolling=false;
 setInterval(async()=>{
-  if(workspacePolling || state.view!=='project-detail' || !state.project || milestoneDialog.open) return;
+  if(workspacePolling || state.view!=='project-detail' || !state.project) return;
   workspacePolling=true;
   const id=state.project.id, navigation=state.navigation;
   try {

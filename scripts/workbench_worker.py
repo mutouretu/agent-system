@@ -80,7 +80,7 @@ def repository_context(root, requirements, max_bytes=48000):
     priority = (
         'src/rd_platform/service/static/index.html',
         'src/rd_platform/service/api.py',
-        'src/rd_platform/service/static/agent_config.js',
+        'src/rd_platform/service/static/app.js',
         'src/rd_platform/service/static/app.css',
     ) if ui_task else ()
     priority_rank = {name: index for index, name in enumerate(priority)}

@@ -23,8 +23,12 @@ def test_dashboard_keeps_existing_workspace_controls(service):
     assert page.status_code == 200
     for element_id in ('project-count', 'stat-passed', 'projects', 'new-project',
                        'nav-project-group', 'nav-workspace', 'workspace-execution',
-                       'workspace-form', 'agent-config-dialog'):
+                       'workspace-form', 'nav-agents'):
         assert f'id="{element_id}"' in page.text
+    assert 'id="agent-management"' not in page.text
+    assert 'id="agent-config-dialog"' not in page.text
+    assert 'agent_config.js' not in page.text
+    assert '开发里程碑与需求包' not in client.get('/assets/app.js').text
 
 
 @pytest.fixture
